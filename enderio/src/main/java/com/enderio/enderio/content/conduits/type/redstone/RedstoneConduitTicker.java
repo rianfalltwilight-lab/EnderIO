@@ -7,9 +7,11 @@ import com.enderio.enderio.api.conduits.network.ConduitNetwork;
 import com.enderio.enderio.api.conduits.ticker.ConduitTickerBase;
 import com.enderio.enderio.init.EIOBlocks;
 import com.enderio.enderio.init.EIOConduitTypes;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 
 public class RedstoneConduitTicker extends ConduitTickerBase<RedstoneConduit> {
@@ -32,9 +34,8 @@ public class RedstoneConduitTicker extends ConduitTickerBase<RedstoneConduit> {
             for (var extractConnection : network.extractConnections(channel)) {
                 int signal;
 
-                var redstoneExtractFilter = extractConnection.inventory()
-                    .getStackInSlot(RedstoneConduit.EXTRACT_FILTER_SLOT)
-                    .getCapability(EnderIOCapabilities.REDSTONE_EXTRACT_FILTER);
+                var stack = extractConnection.inventory().getStackInSlot(RedstoneConduit.EXTRACT_FILTER_SLOT);
+                var redstoneExtractFilter = stack.isEmpty() ? null : stack.getCapability(EnderIOCapabilities.REDSTONE_EXTRACT_FILTER);
 
                 if (redstoneExtractFilter != null) {
                     signal = redstoneExtractFilter.getInputSignal(level, extractConnection.connectedBlockPos(),
@@ -57,12 +58,16 @@ public class RedstoneConduitTicker extends ConduitTickerBase<RedstoneConduit> {
         // If *any* channel changed, update all insert connections.
         // Some insert connections may change even if their channel's signal value did not change.
         if (didAnyChannelChange) {
+            var changed = new LinkedHashSet<BlockPos>();
             for (var insertConnection : network.insertConnections()) {
-                level.updateNeighborsAt(insertConnection.node().pos(), EIOBlocks.CONDUIT_BUNDLE.get());
-
+                changed.add(insertConnection.node().pos());
                 if (insertConnection.connectionConfig(RedstoneConduitConnectionConfig.TYPE).isStrongOutputSignal()) {
-                    level.updateNeighborsAt(insertConnection.connectedBlockPos(), EIOBlocks.CONDUIT_BUNDLE.get());
+                    changed.add(insertConnection.connectedBlockPos());
                 }
+            }
+            // Neighbor callbacks can change the network. Finish collecting this tick's positions first.
+            for (var pos : changed) {
+                level.updateNeighborsAt(pos, EIOBlocks.CONDUIT_BUNDLE.get());
             }
         }
 

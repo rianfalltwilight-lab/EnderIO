@@ -1,34 +1,26 @@
 package com.enderio.enderio.content.filters.item;
 
-import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.ItemStack;
 
-import java.util.List;
 import java.util.Objects;
 
 public class ItemFilterUtils {
-    // Ignore damage as it is controlled with the damage filter.
-    private static final List<DataComponentType<?>> IGNORED_COMPONENT_TYPES = List.of(DataComponents.DAMAGE);
-
     public static boolean doComponentsMatch(ItemStack referenceStack, ItemStack stack) {
-        for (var component : referenceStack.getComponents()) {
-            if (IGNORED_COMPONENT_TYPES.contains(component.type())) {
-                continue;
-            }
-
-            if (!Objects.equals(stack.get(component.type()), component.value())) {
-                return false;
-            }
+        var reference = referenceStack.getComponents();
+        var candidate = stack.getComponents();
+        boolean referenceHasDamage = reference.has(DataComponents.DAMAGE);
+        boolean candidateHasDamage = candidate.has(DataComponents.DAMAGE);
+        if (!referenceHasDamage && !candidateHasDamage && ItemStack.isSameItemSameComponents(referenceStack, stack)) {
+            return true;
         }
 
-        // Ensure no additional components are present
-        for (var component : stack.getComponents()) {
-            if (IGNORED_COMPONENT_TYPES.contains(component.type())) {
-                continue;
-            }
-
-            if (!Objects.equals(referenceStack.get(component.type()), component.value())) {
+        // Ignore damage, which is checked separately. Equal sizes rule out extra components.
+        if (reference.size() - (referenceHasDamage ? 1 : 0) != candidate.size() - (candidateHasDamage ? 1 : 0)) {
+            return false;
+        }
+        for (var component : reference) {
+            if (component.type() != DataComponents.DAMAGE && !Objects.equals(candidate.get(component.type()), component.value())) {
                 return false;
             }
         }

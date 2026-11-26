@@ -198,6 +198,19 @@ public class NetworkTests {
     }
 
     @Test
+    void removingALeafFromADisconnectedBulkGraphStillSplitsTheComponents() {
+        var a = new TestNode(false);
+        var b = new TestNode(false);
+        var c = new TestNode(false);
+        var leaf = new TestNode(false);
+        var network = new BasicNetwork<>(List.of(a, b, c, leaf), List.of(Pair.of(a, b), Pair.of(c, leaf)));
+        network.remove(leaf);
+        Assertions.assertFalse(leaf.isValid());
+        Assertions.assertSame(a.getNetwork(), b.getNetwork());
+        Assertions.assertNotSame(a.getNetwork(), c.getNetwork());
+    }
+
+    @Test
     public void testNetworkSingleNodeWithEdges() {
         // This test is to ensure the node and edge indexing used for serialization
         // works as expected.

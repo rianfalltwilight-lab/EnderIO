@@ -122,6 +122,11 @@ public class SolarPanelBlock extends EIOEntityBlock<SolarPanelBlockEntity> imple
     }
 
     @Override
+    public boolean hasDetailedTooltip(ItemStack itemStack, @Nullable Player player) {
+        return getClass() == SolarPanelBlock.class || AdvancedTooltipProvider.super.hasDetailedTooltip(itemStack, player);
+    }
+
+    @Override
     public void addDetailedTooltips(ItemStack itemStack, @Nullable Player player, List<Component> tooltips) {
         tooltips.add(MachinesLang.PHOTOVOLTAIC_CELL_ADVANCED);
         tooltips.add(MachinesLang.PHOTOVOLTAIC_CELL_ADVANCED2);

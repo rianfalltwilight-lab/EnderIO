@@ -54,7 +54,7 @@ public class WeatherObeliskBlockEntity extends MachineBlockEntity implements Flu
         fluidHandler = createFluidHandler();
 
         craftingTaskHost = new CraftingMachineTaskHost<>(this, this::canAcceptTask,
-                EIORecipes.WEATHER_CHANGE.type().get(), this::createTask, this::createRecipeInput) {
+                EIORecipes.WEATHER_CHANGE.type().get(), this::createTask, this::createRecipeInput, CraftingMachineTaskHost.ProgressSync.MENU) {
 
             @Override
             protected boolean shouldStartNewTask() {

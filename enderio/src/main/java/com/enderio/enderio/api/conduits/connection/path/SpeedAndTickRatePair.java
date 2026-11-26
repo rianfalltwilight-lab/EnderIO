@@ -2,6 +2,8 @@ package com.enderio.enderio.api.conduits.connection.path;
 
 import com.google.common.base.Preconditions;
 
+import java.util.function.BinaryOperator;
+
 /**
  * Represents a speed and tick rate pair.
  * @param speed the speed (every tickRate)
@@ -14,7 +16,7 @@ public record SpeedAndTickRatePair(int speed, int tickRate) {
      * @return a connection path property that minimises the adjusted speed.
      */
     public static ConnectionPathProperty<SpeedAndTickRatePair> minProperty(SpeedAndTickRatePair defaultValue) {
-        return new ConnectionPathProperty<>(allSpeeds -> allSpeeds.stream().min(SpeedAndTickRatePair::compare), defaultValue);
+        return new ConnectionPathProperty.Reducible<>(BinaryOperator.minBy(SpeedAndTickRatePair::compare), defaultValue);
     }
 
     /**

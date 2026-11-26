@@ -86,6 +86,11 @@ public class DarkSteelSwordItem extends SwordItem implements AdvancedTooltipProv
     }
 
     @Override
+    public boolean hasDetailedTooltip(ItemStack itemStack, @Nullable Player player) {
+        return getClass() == DarkSteelSwordItem.class || IDarkSteelItem.super.hasDetailedTooltip(itemStack, player);
+    }
+
+    @Override
     public void addDetailedTooltips(ItemStack itemStack, @Nullable Player player, List<Component> tooltips) {
         tooltips.add(TooltipUtil.withArgs(ArmoryLang.ENDER_HEAD_DROP_CHANCE, 7));
     }

@@ -54,6 +54,7 @@ import java.util.function.Function;
 public class SoulDataReloadListener<T extends SoulData> extends SimpleJsonResourceReloadListener {
     private static final Gson GSON = new Gson();
     public Map<ResourceLocation, T> map = new HashMap<>();
+    private int reloadVersion;
     private final Codec<T> codec;
     private final String folderName;
     private static final Map<String, SoulDataReloadListener<? extends SoulData>> LOADED_SOUL_DATA = new HashMap<>();
@@ -102,7 +103,7 @@ public class SoulDataReloadListener<T extends SoulData> extends SimpleJsonResour
                             partial.message()));
         }
 
-        this.map = newMap;
+        replaceData(newMap);
         LOGGER.info("Data loader for {} loaded {} jsons", this.folderName, this.map.size());
     }
 
@@ -132,6 +133,15 @@ public class SoulDataReloadListener<T extends SoulData> extends SimpleJsonResour
                 PacketDistributor.sendToPlayer(player, packet);
             }
         };
+    }
+
+    public void replaceData(Map<ResourceLocation, T> data) {
+        map = data;
+        reloadVersion++;
+    }
+
+    public int getReloadVersion() {
+        return reloadVersion;
     }
 
     /**

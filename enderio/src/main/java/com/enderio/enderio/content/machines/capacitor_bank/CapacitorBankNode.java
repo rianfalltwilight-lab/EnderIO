@@ -4,6 +4,7 @@ import com.enderio.core.common.graph.INetworkNode;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import org.jetbrains.annotations.Nullable;
 
@@ -46,6 +47,16 @@ public class CapacitorBankNode implements INetworkNode<CapacitorBankNetwork, Cap
 
     public int getMaxEnergyStored() {
         return blockEntity.tier().getStorageCapacity();
+    }
+
+    void detach(CapacitorBankBlockEntity entity) {
+        if (blockEntity == entity && isValid()) {
+            blockEntity = null;
+            network.targetsChanged();
+            if (entity.getLevel() instanceof ServerLevel level) {
+                CapacitorBankSavedData.get(level).releaseNode(this);
+            }
+        }
     }
 
     @Nullable

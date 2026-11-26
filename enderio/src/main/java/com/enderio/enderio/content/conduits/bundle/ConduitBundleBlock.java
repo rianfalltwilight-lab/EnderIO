@@ -90,16 +90,13 @@ public class ConduitBundleBlock extends Block implements EntityBlock, SimpleWate
     @Override
     public @Nullable <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state,
             BlockEntityType<T> blockEntityType) {
-        // return createTickerHelper(blockEntityType, typeSupplier.get(),
-        // EIOBlockEntity::tick);
-        return (level1, pos, state1, blockEntity) -> {
-            if (blockEntity instanceof ConduitBundleBlockEntity conduitBundleBlockEntity) {
-                if (level.isClientSide) {
-                    conduitBundleBlockEntity.clientTick();
-                } else {
-                    conduitBundleBlockEntity.serverTick();
-                }
-                conduitBundleBlockEntity.endTick();
+        if (level.isClientSide()) {
+            return null;
+        }
+        return (server, pos, blockState, entity) -> {
+            if (entity instanceof ConduitBundleBlockEntity bundle) {
+                bundle.serverTick();
+                bundle.endTick();
             }
         };
     }
@@ -219,10 +216,6 @@ public class ConduitBundleBlock extends Block implements EntityBlock, SimpleWate
             BlockPos currentPos, BlockPos neighborPos) {
         if (state.getValue(WATERLOGGED)) {
             level.scheduleTick(currentPos, Fluids.WATER, Fluids.WATER.getTickDelay(level));
-        }
-
-        if (level.getBlockEntity(currentPos) instanceof ConduitBundleBlockEntity conduit) {
-            conduit.updateShape();
         }
 
         return super.updateShape(state, direction, neighborState, level, currentPos, neighborPos);
@@ -660,9 +653,7 @@ public class ConduitBundleBlock extends Block implements EntityBlock, SimpleWate
 
     private Optional<Block> getFacadeBlock(BlockGetter level, BlockPos pos) {
         if (level.getBlockEntity(pos) instanceof ConduitBundleBlockEntity conduitBundle) {
-            if (conduitBundle.hasFacade()) {
-                return Optional.of(conduitBundle.getFacadeBlock());
-            }
+            return Optional.ofNullable(conduitBundle.getFacadeBlockIfPresent());
         }
 
         return Optional.empty();

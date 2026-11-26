@@ -43,8 +43,6 @@ import net.neoforged.neoforge.fluids.SimpleFluidContent;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
 public class DrainBlockEntity extends PoweredMachineBlockEntity implements RangedActor, FluidTankUser {
@@ -60,7 +58,8 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
     private static final TankAccess TANK = new TankAccess();
     private static final int CAPACITY = 3 * FluidType.BUCKET_VOLUME;
     private static final int ENERGY_PER_BUCKET = 1_500;
-    private List<BlockPos> positions;
+    private final BlockPos.MutableBlockPos scanPosition = new BlockPos.MutableBlockPos();
+    private final BlockPos intake;
     private int currentIndex = 0;
     private boolean fluidFound = false;
     private int consumed = 0;
@@ -72,6 +71,7 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
         super(EIOBlockEntities.DRAIN.get(), worldPosition, blockState, false, CapacitorSupport.REQUIRED,
                 EnergyIOMode.Input, ENERGY_CAPACITY, ENERGY_USAGE);
         fluidHandler = createFluidHandler();
+        intake = worldPosition.below();
     }
 
     @Override
@@ -83,7 +83,7 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
     @UseOnly(LogicalSide.SERVER)
     public void setActionRange(ActionRange actionRange) {
         this.actionRange = actionRange.clamp(0, getMaxRange());
-        updateLocations();
+        resetScan();
         setChanged();
 
         if (level != null) {
@@ -146,7 +146,7 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
             return false;
         }
 
-        FluidState fluidState = level.getFluidState(worldPosition.below());
+        FluidState fluidState = level.getFluidState(intake);
         if (fluidState.isEmpty() || !fluidState.isSource()) {
             updateMachineState(MachineState.NO_SOURCE, true);
             return false;
@@ -158,52 +158,55 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
     }
 
     public void drainFluids() {
-        int stop = Math.min(currentIndex + getRange(), positions.size());
-        while (currentIndex < stop) {
-            if (currentIndex >= positions.size()) {
-                currentIndex--;
-            }
-            BlockPos pos = positions.get(currentIndex);
-
-            // Skip, as this is the last checked block
-            if (pos.equals(worldPosition.below()) && positions.size() != 1) {
-                currentIndex++;
-                continue;
-            }
-
-            // Last block, so reset
-            if (currentIndex + 1 == positions.size()) {
-                if (!fluidFound) {
-                    pos = worldPosition.below(); // No fluids found, so consume the last block under the drain
-                } else {
-                    currentIndex = 0;
-                    fluidFound = false;
+        int range = getRange();
+        int width = 2 * range + 1;
+        int count = width * width * width;
+        for (int remaining = range; remaining > 0; remaining--) {
+            BlockPos pos;
+            if (currentIndex == count) {
+                if (fluidFound) {
+                    resetScan();
+                    return;
                 }
-            }
-
-            // Not a valid fluid
-            FluidState fluidState = level.getFluidState(pos);
-            if (fluidState.isEmpty() || !fluidState.isSource()
-                    || !TANK.isFluidValid(this, new FluidStack(fluidState.getType(), 1))) {
-                currentIndex++;
-                continue;
-            }
-
-            // Fluid found, try to consume it
-            fluidFound = true;
-            if (TANK.fill(this, new FluidStack(fluidState.getType(), FluidType.BUCKET_VOLUME),
-                    IFluidHandler.FluidAction.SIMULATE) == FluidType.BUCKET_VOLUME) {
-                if (consumed >= ENERGY_PER_BUCKET) {
-                    level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-                    TANK.fill(this, new FluidStack(fluidState.getType(), FluidType.BUCKET_VOLUME),
-                            IFluidHandler.FluidAction.EXECUTE);
-                    consumed -= ENERGY_PER_BUCKET;
+                // Only take the block feeding the drain once the other candidates have been exhausted.
+                pos = intake;
+            } else {
+                int row = currentIndex / width;
+                pos = scanPosition.set(worldPosition.getX() - range + currentIndex % width,
+                        worldPosition.getY() - width + row % width, worldPosition.getZ() - range + row / width);
+                if (pos.equals(intake)) {
                     currentIndex++;
-                } else {
-                    consumed += getEnergyStorage().consumeEnergy(ENERGY_PER_BUCKET - consumed, false);
+                    continue;
                 }
+            }
+            FluidState fluidState = level.getFluidState(pos);
+            if (fluidState.isEmpty() || !fluidState.isSource() || !type.isSame(fluidState.getType())) {
+                if (currentIndex == count) {
+                    resetScan();
+                    return;
+                }
+                currentIndex++;
+                continue;
+            }
+            var bucket = new FluidStack(fluidState.getType(), FluidType.BUCKET_VOLUME);
+            if (TANK.fill(this, bucket, IFluidHandler.FluidAction.SIMULATE) != FluidType.BUCKET_VOLUME) {
                 return;
             }
+            if (consumed < ENERGY_PER_BUCKET) {
+                consumed += getEnergyStorage().consumeEnergy(ENERGY_PER_BUCKET - consumed, false);
+                return;
+            }
+            // World updates may retain this position. The scan cursor belongs to the next tick.
+            level.setBlock(pos.immutable(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            TANK.fill(this, bucket, IFluidHandler.FluidAction.EXECUTE);
+            consumed -= ENERGY_PER_BUCKET;
+            if (currentIndex == count) {
+                resetScan();
+            } else {
+                currentIndex++;
+                fluidFound = true;
+            }
+            return;
         }
     }
 
@@ -224,17 +227,12 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
     @Override
     public void onLoad() {
         super.onLoad();
-        updateLocations();
+        resetScan();
     }
 
-    private void updateLocations() {
-        positions = new ArrayList<>();
+    private void resetScan() {
         currentIndex = 0;
-        int range = getRange();
-        for (BlockPos pos : BlockPos.betweenClosed(worldPosition.offset(-range, -range * 2 - 1, -range),
-                worldPosition.offset(range, -1, range))) {
-            positions.add(pos.immutable()); // Need to make it immutable
-        }
+        fluidFound = false;
     }
 
     @Nullable
@@ -265,6 +263,7 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
         consumed = tag.getInt(CONSUMED);
         loadTank(lookupProvider, tag);
 
+        int previousRange = getRange();
         // TODO: Ender IO 8 - remove support for old attachment loading
         if (hasData(EIOAttachments.ACTION_RANGE)) {
             actionRange = getData(EIOAttachments.ACTION_RANGE);
@@ -275,6 +274,10 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
         } else {
             actionRange = DEFAULT_RANGE;
         }
+        actionRange = actionRange.clamp(0, getMaxRange());
+        if (previousRange != getRange()) {
+            resetScan();
+        }
     }
 
     @Override
@@ -283,7 +286,8 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
 
         var actionRange = components.get(EIODataComponents.ACTION_RANGE);
         if (actionRange != null) {
-            this.actionRange = actionRange;
+            this.actionRange = actionRange.clamp(0, getMaxRange());
+            resetScan();
         }
 
         SimpleFluidContent storedFluid = components.get(EIODataComponents.ITEM_FLUID_CONTENT);

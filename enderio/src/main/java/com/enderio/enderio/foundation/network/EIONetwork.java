@@ -2,6 +2,7 @@ package com.enderio.enderio.foundation.network;
 
 import com.enderio.enderio.foundation.network.packets.ClientBoundRemoveCapacitorBankPacket;
 import com.enderio.enderio.foundation.network.packets.ClientBoundSyncCapacitorBankPacket;
+import com.enderio.enderio.foundation.network.packets.ClientboundCapacitorBankValuesPacket;
 import com.enderio.enderio.foundation.network.packets.ClientboundConduitExtraGuiDataPacket;
 import com.enderio.enderio.foundation.network.packets.ClientboundConduitListPacket;
 import com.enderio.enderio.foundation.network.packets.ClientboundFarmStationSoulPacket;
@@ -63,6 +64,8 @@ public class EIONetwork {
 
         registrar.playToClient(ClientBoundSyncCapacitorBankPacket.TYPE, ClientBoundSyncCapacitorBankPacket.STREAM_CODEC,
             ClientPayloadHandler.getInstance()::handleSyncCapacitorBankPacket);
+        registrar.optional().playToClient(ClientboundCapacitorBankValuesPacket.TYPE, ClientboundCapacitorBankValuesPacket.STREAM_CODEC,
+            ClientPayloadHandler.getInstance()::handleCapacitorBankValues);
 
         registrar.playToClient(ClientBoundRemoveCapacitorBankPacket.TYPE, ClientBoundRemoveCapacitorBankPacket.STREAM_CODEC,
             ClientPayloadHandler.getInstance()::handleRemoveCapacitorBankPacket);

@@ -25,6 +25,7 @@ import com.enderio.enderio.content.conduits.legacy.DynamicConnectionState;
 import com.enderio.enderio.content.conduits.legacy.StaticConnectionStates;
 import com.enderio.enderio.content.conduits.menu.ConduitMenu;
 import com.enderio.enderio.content.conduits.network.ConduitNetworkSavedData;
+import com.enderio.enderio.content.conduits.network.ConduitNetworkImpl;
 import com.enderio.enderio.content.conduits.network.ConduitNodeImpl;
 import com.enderio.enderio.content.conduits.network.IConduitNodeAttachment;
 import com.enderio.enderio.foundation.EIONBTKeys;
@@ -121,6 +122,8 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
     private final ConduitShape shape = new ConduitShape();
 
     private boolean hasDirtyNodes = false;
+    private int bundleChangeDepth;
+    private boolean pendingBundleChange;
 
     // Deferred connection check
     private UpdateState checkConnection = UpdateState.NONE;
@@ -175,20 +178,20 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
     public void serverTick() {
         super.serverTick();
 
-        if (level != null) {
-            checkConnection = checkConnection.next();
-            if (checkConnection.isInitialized()) {
-                updateConnections(level, getBlockPos(), null, false);
-            }
+        if (level == null || (checkConnection == UpdateState.NONE && !hasDirtyNodes)) {
+            return;
+        }
 
-            if (hasDirtyNodes) {
-                // This is for sending updates to clients when the nodes are dirty
-                // as such we only fire a block update
-                // TODO: We're also saving here, but maybe we shouldn't bother?
-                level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
-                setChanged();
-                hasDirtyNodes = false;
-            }
+        checkConnection = checkConnection.next();
+        if (checkConnection.isInitialized()) {
+            updateConnections(level, getBlockPos(), null, false);
+        }
+
+        if (hasDirtyNodes) {
+            // Clear first so an update triggered by the notification reaches the next tick.
+            hasDirtyNodes = false;
+            level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
+            setChanged();
         }
     }
 
@@ -197,7 +200,7 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         super.onLoad();
 
         updateShape();
-        updateNeighborRedstone();
+        updateNeighborRedstone(true);
 
         if (level != null && !level.isClientSide()) {
             // Fire on-created events
@@ -235,7 +238,14 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
             return;
         }
 
-        level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
+        if (bundleChangeDepth > 0) {
+            pendingBundleChange = true;
+            return;
+        }
+
+        if (!level.isClientSide()) {
+            level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
+        }
         level.updateNeighborsAt(getBlockPos(), getBlockState().getBlock());
         level.invalidateCapabilities(getBlockPos());
         setChanged();
@@ -246,9 +256,20 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         }
     }
 
+    private void endBundleChanges() {
+        if (--bundleChangeDepth == 0 && pendingBundleChange) {
+            // An observer may change the bundle again while neighbors are being notified.
+            pendingBundleChange = false;
+            bundleChanged();
+        }
+    }
+
     // region Shape and Model
 
     public ConduitShape getShape() {
+        if (pendingBundleChange) {
+            updateShape();
+        }
         return shape;
     }
 
@@ -263,9 +284,10 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_ALL);
         }
 
-        if (hasFacade()) {
+        var facadeBlock = getFacadeBlockIfPresent();
+        if (facadeBlock != null) {
             ResourceKey<Level> dimension = level.dimension();
-            getFacadesForDimension(dimension).put(worldPosition.asLong(), getFacadeBlock().defaultBlockState());
+            getFacadesForDimension(dimension).put(worldPosition.asLong(), facadeBlock.defaultBlockState());
             getChunkFacadesForDimension(dimension).computeIfAbsent(SectionPos.asLong(worldPosition), p -> new LongOpenHashSet())
                     .add(worldPosition.asLong());
         } else {
@@ -328,7 +350,7 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
 
         // Get hit conduit
         var side = context.getClickedFace();
-        var conduit = shape.getConduit(context.getClickedPos(), context.getHitResult());
+        var conduit = getShape().getConduit(context.getClickedPos(), context.getHitResult());
         if (conduit == null) {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
@@ -350,7 +372,7 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         }
 
         // Get connection
-        var conduitConnection = shape.getConnectionFromHit(context.getClickedPos(), context.getHitResult());
+        var conduitConnection = getShape().getConnectionFromHit(context.getClickedPos(), context.getHitResult());
         if (conduitConnection != null) {
             disableNeighborConnection(conduitConnection);
             return ItemInteractionResult.sidedSuccess(level.isClientSide());
@@ -467,7 +489,12 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
 
     @Nullable
     public Holder<Conduit<?, ?>> getConduitByType(ConduitType<?, ?> conduitType) {
-        return conduits.stream().filter(c -> c.value().type() == conduitType).findFirst().orElse(null);
+        for (var conduit : conduits) {
+            if (conduit.value().type() == conduitType) {
+                return conduit;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -539,6 +566,16 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
 
     @Override
     public AddConduitResult addConduit(Holder<Conduit<?, ?>> conduit, @Nullable Direction primaryConnectionSide,
+            @Nullable Player player) {
+        bundleChangeDepth++;
+        try {
+            return addConduitInternal(conduit, primaryConnectionSide, player);
+        } finally {
+            endBundleChanges();
+        }
+    }
+
+    private AddConduitResult addConduitInternal(Holder<Conduit<?, ?>> conduit, @Nullable Direction primaryConnectionSide,
             @Nullable Player player) {
         if (level == null) {
             return new AddConduitResult.Blocked();
@@ -800,12 +837,26 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
 
     @Override
     public List<Holder<Conduit<?, ?>>> getConnectedConduits(Direction side) {
-        return conduitConnections.entrySet()
-                .stream()
-                .filter(e -> e.getValue().getConnectionStatus(side).isConnected())
-                .map(Map.Entry::getKey)
-                .sorted(Comparator.comparingInt(ConduitSorter::getSortIndex))
-                .toList();
+        List<Holder<Conduit<?, ?>>> connected = new ArrayList<>();
+        for (var conduit : conduits) {
+            var connections = conduitConnections.get(conduit);
+            if (connections == null || !connections.getConnectionStatus(side).isConnected()) {
+                continue;
+            }
+            if (!connected.isEmpty() && ConduitSorter.getSortIndex(conduit) <= ConduitSorter.getSortIndex(connected.getLast())) {
+                // Old saves keep their original indices for node recovery. Preserve the map's tie order, too.
+                connected.clear();
+                conduitConnections.forEach((type, container) -> {
+                    if (container.getConnectionStatus(side).isConnected()) {
+                        connected.add(type);
+                    }
+                });
+                connected.sort(Comparator.comparingInt(ConduitSorter::getSortIndex));
+                break;
+            }
+            connected.add(conduit);
+        }
+        return Collections.unmodifiableList(connected);
     }
 
     @Override
@@ -840,13 +891,12 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         } else if (!config.isConnected()) {
             setConnectionStatus(conduit, side, ConnectionStatus.DISABLED);
         } else {
-            // Fire on config changed manually if we've not changed any connections
+            // Status setters already notify observers.
             if (level != null && !level.isClientSide()) {
                 getConduitNode(conduit).onConfigChanged();
             }
+            bundleChanged();
         }
-
-        bundleChanged();
     }
 
     public void setConnectionStatus(Holder<Conduit<?, ?>> conduit, Direction side, ConnectionStatus status) {
@@ -923,10 +973,8 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
                         conduit.value().onConnectTo(node, neighbourNode);
                         neighbourConduit.value().onConnectTo(neighbourNode, node);
 
-                        // Connect the neighbor to our node.
-                        node.getNetwork()
-                            .connect(node, neighbourNode,
-                                n -> ConduitNetworkSavedData.onNetworkDiscarded((ServerLevel) level, n));
+                        ConduitNetworkImpl.connectAdjacentNodes(node, neighbourNode,
+                            n -> ConduitNetworkSavedData.onNetworkDiscarded((ServerLevel) level, n));
                     }
                 }
                 return true;
@@ -984,6 +1032,28 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
             return;
         }
 
+        if (isNeighborChanged && !checksNeighborConnections()) {
+            return;
+        }
+        bundleChangeDepth++;
+        try {
+            checkConnections(level, isNeighborChanged);
+        } finally {
+            endBundleChanges();
+        }
+    }
+
+    private boolean checksNeighborConnections() {
+        for (var conduit : conduits) {
+            if (conduit.value().shouldCheckConnectionsOnNeighborChange()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void checkConnections(Level level, boolean isNeighborChanged) {
+        // Third-party connection predicates can depend on other faces of the same block.
         for (Direction side : Direction.values()) {
             for (var conduit : conduits) {
                 if (isNeighborChanged && !conduit.value().shouldCheckConnectionsOnNeighborChange()) {
@@ -1043,13 +1113,17 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
     private boolean hasRedstoneSignal;
 
     public void updateNeighborRedstone() {
-        if (level == null) {
-            hasRedstoneSignal = false;
-        } else {
-            hasRedstoneSignal = level.hasNeighborSignal(getBlockPos());
-        }
+        updateNeighborRedstone(false);
+    }
 
-        if (level != null && !level.isClientSide()) {
+    private void updateNeighborRedstone(boolean initialLoad) {
+        boolean signal = level != null && level.hasNeighborSignal(getBlockPos());
+        boolean changed = signal != hasRedstoneSignal;
+        hasRedstoneSignal = signal;
+
+        if (level != null && !level.isClientSide() && (initialLoad || changed
+                || !signal && getConduitByType(EIOConduitTypes.REDSTONE.get()) != null)) {
+            // A bundled redstone color can change while the external signal stays off.
             for (var node : conduitNodes.values()) {
                 node.onRedstoneChanged();
             }
@@ -1093,6 +1167,15 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
     public boolean hasFacade() {
         return !facadeProvider.isEmpty()
                 && facadeProvider.getCapability(EnderIOCapabilities.CONDUIT_FACADE_PROVIDER) != null;
+    }
+
+    @Nullable
+    Block getFacadeBlockIfPresent() {
+        if (facadeProvider.isEmpty()) {
+            return null;
+        }
+        var provider = facadeProvider.getCapability(EnderIOCapabilities.CONDUIT_FACADE_PROVIDER);
+        return provider == null ? null : provider.block();
     }
 
     @Override
@@ -1356,10 +1439,11 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         super.saveAdditionalSynced(tag, registries);
 
         if (!conduits.isEmpty()) {
+            var ops = registries.createSerializationContext(NbtOps.INSTANCE);
             ListTag conduitList = new ListTag();
             for (var conduit : conduits) {
                 conduitList
-                        .add(Conduit.CODEC.encodeStart(registries.createSerializationContext(NbtOps.INSTANCE), conduit)
+                        .add(Conduit.CODEC.encodeStart(ops, conduit)
                                 .getOrThrow());
             }
             tag.put(CONDUITS_KEY, conduitList);
@@ -1368,36 +1452,30 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
             ListTag conduitConnectionsList = new ListTag();
             for (var conduit : conduits) {
                 ListTag connectionsList = new ListTag();
+                var container = conduitConnections.computeIfAbsent(conduit, ConnectionContainer::new);
                 for (Direction side : Direction.values()) {
+                    var status = container.getConnectionStatus(side);
+                    var config = container.configs.get(side);
+                    boolean saveConfig = config != null && !config.equals(config.type().getDefault());
+                    var inventory = container.inventories.get(side);
+                    boolean saveInventory = inventory != null && !inventory.isEmpty();
+                    if (status == ConnectionStatus.DISCONNECTED && !saveConfig && !saveInventory) {
+                        continue;
+                    }
+
                     CompoundTag connectionTag = new CompoundTag();
                     connectionTag.putString("Side", side.getSerializedName());
-                    connectionTag.putString("Status", getConnectionStatus(conduit, side).getSerializedName());
-
-                    // Raw access to ensure we save the true data.
-                    var config = conduitConnections.get(conduit).configs.get(side);
-                    if (config != null && !config.equals(config.type().getDefault())) {
-                        connectionTag.put("Config",
-                                ConnectionConfig.GENERIC_CODEC
-                                        .encodeStart(registries.createSerializationContext(NbtOps.INSTANCE), config)
-                                        .getOrThrow());
+                    connectionTag.putString("Status", status.getSerializedName());
+                    if (saveConfig) {
+                        connectionTag.put("Config", ConnectionConfig.GENERIC_CODEC.encodeStart(ops, config).getOrThrow());
                     }
-
-                    var inventory = conduitConnections.get(conduit).inventories.get(side);
-                    if (inventory != null) {
-                        ListTag inventoryListTag = new ListTag();
-
-                        boolean shouldSave = false;
+                    if (saveInventory) {
+                        ListTag inventoryTag = new ListTag();
                         for (int i = 0; i < inventory.getSlots(); i++) {
-                            ItemStack stack = inventory.getStackInSlot(i);
-                            shouldSave |= !stack.isEmpty();
-                            inventoryListTag.add(stack.saveOptional(registries));
+                            inventoryTag.add(inventory.getStackInSlot(i).saveOptional(registries));
                         }
-
-                        if (shouldSave) {
-                            connectionTag.put("Inventory", inventoryListTag);
-                        }
+                        connectionTag.put("Inventory", inventoryTag);
                     }
-
                     connectionsList.add(connectionTag);
                 }
 
@@ -1515,6 +1593,19 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
 
                 lazyNodeData.put(conduitParseResult.getOrThrow(), dataParseResult.getOrThrow());
             }
+        }
+
+        // NBT can also be applied after setLevel (for example by structure placement).
+        // In that order setLevel saw an empty bundle, so restore the nodes before
+        // connection updates or ticks can observe the newly loaded conduits.
+        if (level instanceof ServerLevel) {
+            isLoading = true;
+            try {
+                loadFromSavedData();
+            } finally {
+                isLoading = false;
+            }
+            checkConnection = checkConnection.activate();
         }
 
         ensureModelsAreCorrect();
@@ -1667,6 +1758,15 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
                 super(conduit.value().getInventorySize());
             }
 
+            private boolean isEmpty() {
+                for (int i = 0; i < getSlots(); i++) {
+                    if (!getStackInSlot(i).isEmpty()) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
             @Override
             public boolean isItemValid(int slot, ItemStack stack) {
                 return conduit.value().isItemValid(slot, stack);
@@ -1684,7 +1784,10 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
     private class NeighboringCapabilityCaches implements ConduitCapabilityAccessor {
         private final Runnable invalidationListener;
 
-        private final Map<Direction, Map<BlockCapability<?, ?>, Map<Object, BlockCapabilityCache<?, ?>>>> cachesByNeighbor = new EnumMap<>(Direction.class);
+        private final Map<BlockCapability<?, ?>, BlockCapabilityCache<?, ?>[]> sidedCaches = new HashMap<>();
+        private final Map<CapabilityQuery, BlockCapabilityCache<?, ?>> otherCaches = new HashMap<>();
+
+        private record CapabilityQuery(Direction side, BlockCapability<?, ?> capability, @Nullable Object context) {}
 
         private NeighboringCapabilityCaches(Runnable invalidationListener) {
             this.invalidationListener = invalidationListener;
@@ -1696,10 +1799,21 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
                 return level.getCapability(capability, getBlockPos().relative(neighborSide), context);
             }
 
-            var cachesByCapability = cachesByNeighbor.computeIfAbsent(neighborSide, d -> new HashMap<>());
-            var cachesByContext = cachesByCapability.computeIfAbsent(capability, c -> new HashMap<>());
-            var cache = cachesByContext.computeIfAbsent(context, c ->
-                BlockCapabilityCache.create(capability, serverLevel, getBlockPos().relative(neighborSide), context, () -> !isRemoved(), invalidationListener));
+            BlockCapabilityCache<?, ?> cache;
+            if (context == neighborSide.getOpposite()) {
+                // The normal conduit query uses the opposite face as its context.
+                var sides = sidedCaches.computeIfAbsent(capability, ignored -> new BlockCapabilityCache<?, ?>[Direction.values().length]);
+                cache = sides[neighborSide.ordinal()];
+                if (cache == null) {
+                    cache = BlockCapabilityCache.create(capability, serverLevel, getBlockPos().relative(neighborSide),
+                            context, () -> !isRemoved(), invalidationListener);
+                    sides[neighborSide.ordinal()] = cache;
+                }
+            } else {
+                var key = new CapabilityQuery(neighborSide, capability, context);
+                cache = otherCaches.computeIfAbsent(key, ignored -> BlockCapabilityCache.create(capability,
+                        serverLevel, getBlockPos().relative(neighborSide), context, () -> !isRemoved(), invalidationListener));
+            }
 
             //noinspection unchecked
             return (T)cache.getCapability();

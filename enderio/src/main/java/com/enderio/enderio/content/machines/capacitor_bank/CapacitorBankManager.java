@@ -1,5 +1,6 @@
 package com.enderio.enderio.content.machines.capacitor_bank;
 
+import com.enderio.enderio.foundation.network.packets.ClientboundCapacitorBankValuesPacket;
 import net.minecraft.core.BlockPos;
 import org.jetbrains.annotations.Nullable;
 
@@ -17,6 +18,15 @@ public class CapacitorBankManager {
 
     public static void addData(UUID uuid, long storedEnergy, long capacity, long added, long send, List<BlockPos> nodes) {
         DATA.put(uuid, new CapacitorSyncData(storedEnergy, capacity, added, send, nodes));
+    }
+
+    public static void updateValues(ClientboundCapacitorBankValuesPacket values) {
+        DATA.computeIfPresent(values.uuid(), (id, previous) ->
+            new CapacitorSyncData(values.storedEnergy(), values.capacity(), values.added(), values.send(), previous.nodes()));
+    }
+
+    public static void clear() {
+        DATA.clear();
     }
 
     public static void removeData(UUID uuid) {

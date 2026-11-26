@@ -2,15 +2,14 @@ package com.enderio.enderio.content.conduits.type.item;
 
 import com.enderio.enderio.api.EnderIOCapabilities;
 import com.enderio.enderio.api.conduits.Conduit;
-import com.enderio.enderio.api.conduits.ConduitType;
 import com.enderio.enderio.api.conduits.connection.path.ConduitConnectionPath;
 import com.enderio.enderio.api.conduits.network.ConduitNetwork;
 import com.enderio.enderio.api.conduits.ticker.ConduitTickerBase;
 import com.enderio.enderio.api.filter.ItemFilterContext;
 import com.enderio.enderio.api.filter.ItemFilterDirection;
+import com.enderio.enderio.content.filters.item.NonMutatingItemFilter;
 import com.enderio.enderio.init.EIOConduitTypes;
-import com.google.common.collect.Maps;
-import com.mojang.logging.LogUtils;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.DyeColor;
@@ -18,10 +17,8 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
-import org.slf4j.Logger;
 
 import java.util.List;
-import java.util.Map;
 
 public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
 
@@ -33,14 +30,15 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
 
     @Override
     protected void tickNetwork(ServerLevel level, ConduitNetwork network, List<Holder<Conduit<?, ?>>> tickableConduits) {
-        Map<ConduitConnectionPath, Integer> insertedPerPath = Maps.newHashMap();
+        var remainingPerPath = new Object2IntOpenHashMap<ConduitConnectionPath>();
+        remainingPerPath.defaultReturnValue(-1);
 
         for (var channel : network.allChannels()) {
-            tickChannel(network, tickableConduits, insertedPerPath, channel);
+            tickChannel(network, tickableConduits, remainingPerPath, channel);
         }
     }
 
-    private void tickChannel(ConduitNetwork network, List<Holder<Conduit<?, ?>>> tickableConduits, Map<ConduitConnectionPath, Integer> insertedPerPath, DyeColor channel) {
+    private void tickChannel(ConduitNetwork network, List<Holder<Conduit<?, ?>>> tickableConduits, Object2IntOpenHashMap<ConduitConnectionPath> remainingPerPath, DyeColor channel) {
         toNextExtract: for (var extractConnection : network.extractConnections(channel)) {
             var insertPaths = network.insertConnectionsFrom(extractConnection);
             if (insertPaths.isEmpty()) {
@@ -65,12 +63,13 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
             var connectionConfig = extractConnection.connectionConfig(EIOConduitTypes.ConnectionTypes.ITEM.get());
 
             // Get extraction filter
-            var extractFilter = extractConnection.inventory()
-                .getStackInSlot(ItemConduit.EXTRACT_FILTER_SLOT)
-                .getCapability(EnderIOCapabilities.ITEM_FILTER);
+            var extractFilterStack = extractConnection.inventory().getStackInSlot(ItemConduit.EXTRACT_FILTER_SLOT);
+            var extractFilter = extractFilterStack.isEmpty() ? null : extractFilterStack.getCapability(EnderIOCapabilities.ITEM_FILTER);
+            var extractContext = extractFilter == null ? null : new ItemFilterContext(extractHandler, ItemFilterDirection.EXTRACT);
 
             int extracted = 0;
             int speed = extractConduit.value().transferRatePerCycle();
+            int tickRate = extractConduit.value().networkTickRate();
 
             nextItem: for (int i = 0; i < extractHandler.getSlots(); i++) {
                 ItemStack extractedItem = extractHandler.extractItem(i, speed - extracted, true);
@@ -81,11 +80,11 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
                 // Ensure we cap the stack to its max size, even if the parent handler doesn't respect it.
                 int extractedItemMaxStack = extractedItem.getMaxStackSize();
                 if (extractedItem.getCount() > extractedItemMaxStack) {
-                    extractedItem.setCount(extractedItemMaxStack);
+                    extractedItem = extractedItem.copyWithCount(extractedItemMaxStack);
                 }
 
                 if (extractFilter != null) {
-                    extractedItem = extractFilter.test(extractedItem, new ItemFilterContext(extractHandler, ItemFilterDirection.EXTRACT));
+                    extractedItem = extractFilter.test(extractedItem, extractContext);
                     if (extractedItem.isEmpty()) {
                         continue;
                     }
@@ -104,18 +103,12 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
                     var insertPath = insertPaths.get(senderIndex);
                     var insertConnection = insertPath.end();
 
-                    // Get the adjusted speed (as some conduits tick at differing speeds)
-                    var pathSpeedAndTickRate = insertPath.property(ItemConduit.PATH_SPEED_AND_TICK_RATE);
-                    final int maxSpeed = pathSpeedAndTickRate.getAdjustedSpeed(extractConduit.value().networkTickRate());
-
-                    // Calculate remaining 'speed' for this path
-                    int remaining = maxSpeed - insertedPerPath.getOrDefault(insertPath, 0);
-                    if (remaining <= 0) {
-                        continue;
+                    int remaining = remainingPerPath.getInt(insertPath);
+                    if (remaining < 0) {
+                        remaining = Math.max(0, insertPath.property(ItemConduit.PATH_SPEED_AND_TICK_RATE).getAdjustedSpeed(tickRate));
+                        remainingPerPath.put(insertPath, remaining);
                     }
-
-                    var insertHandler = insertConnection.getSidedCapability(Capabilities.ItemHandler.BLOCK);
-                    if (insertHandler == null) {
+                    if (remaining == 0) {
                         continue;
                     }
 
@@ -126,60 +119,53 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
                         continue;
                     }
 
-                    // Copy the stack so we can modify the count (if the path limit is reached) and to ensure extractedItem isn't modified by
-                    // item handler implementations (Create Chute for example)
-                    ItemStack itemToInsert = extractedItem.copy();
-
-                    // Limit to path's max speed
-                    if (itemToInsert.getCount() > remaining) {
-                        itemToInsert.setCount(remaining);
+                    var insertHandler = insertConnection.getSidedCapability(Capabilities.ItemHandler.BLOCK);
+                    if (insertHandler == null) {
+                        continue;
                     }
-
-                    var insertFilter = insertConnection.inventory()
-                        .getStackInSlot(ItemConduit.INSERT_FILTER_SLOT)
-                        .getCapability(EnderIOCapabilities.ITEM_FILTER);
-
-                    if (insertFilter != null) {
-                        itemToInsert = insertFilter.test(itemToInsert, new ItemFilterContext(insertConnection.getSidedCapability(Capabilities.ItemHandler.BLOCK),
-                            ItemFilterDirection.INSERT));
+                    int offer = Math.min(extractedItem.getCount(), Math.min(remaining, speed - extracted));
+                    var filterStack = insertConnection.inventory().getStackInSlot(ItemConduit.INSERT_FILTER_SLOT);
+                    var filter = filterStack.isEmpty() ? null : filterStack.getCapability(EnderIOCapabilities.ITEM_FILTER);
+                    ItemStack itemToInsert;
+                    if (filter != null) {
+                        // Custom filters may edit the argument even when they reject it.
+                        var candidate = filter instanceof NonMutatingItemFilter && offer == extractedItem.getCount()
+                                ? extractedItem : extractedItem.copyWithCount(offer);
+                        itemToInsert = filter.test(candidate, new ItemFilterContext(insertHandler, ItemFilterDirection.INSERT));
                         if (itemToInsert.isEmpty()) {
                             continue;
                         }
+                        if (itemToInsert == extractedItem || itemToInsert.getCount() > offer) {
+                            itemToInsert = itemToInsert.copyWithCount(Math.min(offer, itemToInsert.getCount()));
+                        }
+                    } else {
+                        itemToInsert = extractedItem.copyWithCount(offer);
                     }
 
+                    // Some handlers modify their input stack while inserting (e.g. Create chutes).
+                    int offeredCount = itemToInsert.getCount();
                     ItemStack notInserted = ItemHandlerHelper.insertItem(insertHandler, itemToInsert, false);
-                    int successfullyInserted = itemToInsert.getCount() - notInserted.getCount();
+                    int successfullyInserted = offeredCount - notInserted.getCount();
 
                     if (successfullyInserted > 0) {
                         extracted += successfullyInserted;
                         extractHandler.extractItem(i, successfullyInserted, false);
 
                         // Track how much was inserted through this path.
-                        insertedPerPath.compute(insertPath, (k, v) -> v == null ? successfullyInserted : v + successfullyInserted);
+                        remainingPerPath.put(insertPath, remaining - successfullyInserted);
 
                         if (connectionConfig.isRoundRobin()) {
                             nodeData.setIndex(extractConnection.connectionSide(), senderIndex + 1);
                         }
 
-                        if (extracted >= speed || isEmpty(extractHandler, i + 1)) {
+                        if (extracted >= speed) {
                             continue toNextExtract;
-                        } else {
-                            continue nextItem;
                         }
+                        continue nextItem;
                     }
                 }
             }
         }
     }
 
-    // TODO: is this necessary?
-    private boolean isEmpty(IItemHandler itemHandler, int afterIndex) {
-        for (var i = afterIndex; i < itemHandler.getSlots(); i++) {
-            if (!itemHandler.getStackInSlot(i).isEmpty()) {
-                return false;
-            }
-        }
-
-        return true;
-    }
 }

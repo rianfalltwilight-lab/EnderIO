@@ -24,16 +24,16 @@ public class RedstoneTimerFilter implements RedstoneInputFilter {
 
     @Override
     public int getInputSignal(Level level, BlockPos pos, Direction direction) {
-        int ticks = getTicks();
-        ticks += 2; //TODO Conduits tick every 2 ticks, so make this clear in the gui
-        int maxTicks = getMaxTicks();
-        if (ticks >= maxTicks) {
+        var previous = stack.get(EIODataComponents.REDSTONE_TIMER_FILTER);
+        int ticks = previous.ticks() + 2; // Conduits tick every two game ticks.
+        boolean pulse = ticks >= previous.maxTicks();
+        if (pulse) {
             ticks = 0;
-            setTimer(ticks, maxTicks);
-            return 15;
         }
-        setTimer(ticks, maxTicks);
-        return 0;
+        if (ticks != previous.ticks()) {
+            setTimer(ticks, previous.maxTicks());
+        }
+        return pulse ? 15 : 0;
     }
 
     public int getMaxTicks() {

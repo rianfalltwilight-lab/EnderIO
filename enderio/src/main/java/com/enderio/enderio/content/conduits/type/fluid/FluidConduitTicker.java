@@ -7,18 +7,16 @@ import com.enderio.enderio.api.conduits.connection.path.ConduitConnectionPath;
 import com.enderio.enderio.api.conduits.network.ConduitNetwork;
 import com.enderio.enderio.api.conduits.ticker.ConduitTickerBase;
 import com.enderio.enderio.init.EIOConduitTypes;
-import com.google.common.collect.Maps;
+import com.enderio.enderio.content.filters.fluid.EnderFluidFilter;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.material.Fluid;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.FluidUtil;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 
 public class FluidConduitTicker extends ConduitTickerBase<FluidConduit> {
 
@@ -30,8 +28,8 @@ public class FluidConduitTicker extends ConduitTickerBase<FluidConduit> {
 
     @Override
     protected void tickNetwork(ServerLevel level, ConduitNetwork network, List<Holder<Conduit<?, ?>>> tickableConduits) {
-        Map<ConduitConnectionPath, Integer> insertedPerPath = Maps.newHashMap();
-        
+        var insertedPerPath = new Object2IntOpenHashMap<ConduitConnectionPath>();
+
         for (var channel : network.allChannels()) {
             for (var extractConnection : network.extractConnections(channel)) {
                 var insertPaths = network.insertConnectionsFrom(extractConnection);
@@ -39,102 +37,72 @@ public class FluidConduitTicker extends ConduitTickerBase<FluidConduit> {
                     continue;
                 }
 
-                IFluidHandler extractHandler = extractConnection.getSidedCapability(Capabilities.FluidHandler.BLOCK);
-                if (extractHandler == null) {
-                    continue;
-                }
-
                 final var extractConduit = extractConnection.node().conduit(conduitType());
-                final int fluidRate = extractConduit.value().transferRatePerTick() * conduitType().getTickRate(extractConduit);
-
-                int remaining = fluidRate;
-
-                for (int i = 0; i < extractHandler.getTanks() && remaining > 0; i++) {
-                    if (extractHandler.getFluidInTank(i).isEmpty()) {
-                        continue;
+                int remaining = extractConduit.value().transferRatePerTick() * conduitType().getTickRate(extractConduit);
+                for (int i = 0; remaining > 0; i++) {
+                    var handler = extractConnection.getSidedCapability(Capabilities.FluidHandler.BLOCK);
+                    if (handler == null || i >= handler.getTanks()) {
+                        break;
                     }
-
-                    FluidStack fluid = extractHandler.getFluidInTank(i);
-                    remaining = doFluidTransfer(fluid, remaining, extractConnection, insertPaths, insertedPerPath);
+                    FluidStack fluid = handler.getFluidInTank(i);
+                    if (!fluid.isEmpty()) {
+                        remaining = doFluidTransfer(fluid, remaining, extractConnection, handler, insertPaths, insertedPerPath);
+                    }
                 }
             }
         }
     }
 
     private int doFluidTransfer(FluidStack fluid, int maxTransfer, ConduitBlockConnection extractConnection,
-        List<ConduitConnectionPath> insertPaths, Map<ConduitConnectionPath, Integer> insertedPerPath) {
-        var extractHandler = Objects
-            .requireNonNull(extractConnection.getSidedCapability(Capabilities.FluidHandler.BLOCK));
-
-        // Attempt to drain fluid from the target.
-        FluidStack extractedFluid = extractHandler.drain(fluid.copyWithAmount(maxTransfer),
-            IFluidHandler.FluidAction.SIMULATE);
-        if (extractedFluid.isEmpty()) {
+            IFluidHandler extractHandler, List<ConduitConnectionPath> insertPaths, Object2IntOpenHashMap<ConduitConnectionPath> insertedPerPath) {
+        var filterStack = extractConnection.inventory().getStackInSlot(FluidConduit.EXTRACT_FILTER_SLOT);
+        var extractFilter = filterStack.isEmpty() ? null : filterStack.getCapability(EnderIOCapabilities.FLUID_FILTER);
+        var simulated = extractHandler.drain(fluid.copyWithAmount(maxTransfer), IFluidHandler.FluidAction.SIMULATE);
+        if (simulated.isEmpty()) {
             return maxTransfer;
         }
+        var allowed = extractFilter == null ? simulated : extractFilter.test(extractHandler, simulated);
+        int available = Math.min(maxTransfer, allowed.getAmount());
 
-        // Test the extracted fluid against the target
-        var extractFilter = extractConnection.inventory()
-            .getStackInSlot(FluidConduit.EXTRACT_FILTER_SLOT)
-            .getCapability(EnderIOCapabilities.FLUID_FILTER);
-
-        if (extractFilter != null) {
-            extractedFluid = extractFilter.test(extractHandler, extractedFluid);
-            if (extractedFluid.isEmpty()) {
-                return maxTransfer;
+        for (var path : insertPaths) {
+            if (available <= 0) {
+                break;
             }
-        }
-
-        // Insert into any available blocks
-        for (var insertPath : insertPaths) {
-            var insertConnection = insertPath.end();
-            final int maxInsertSpeed = insertPath.property(FluidConduit.PATH_MAX_TRANSFER_RATE);
-
-            // Calculate remaining 'speed' for this path
-            int remaining = maxInsertSpeed - insertedPerPath.getOrDefault(insertPath, 0);
-            if (remaining <= 0) {
+            int sent = insertedPerPath.getInt(path);
+            int offer = Math.min(available, path.property(FluidConduit.PATH_MAX_TRANSFER_RATE) - sent);
+            if (offer <= 0) {
                 continue;
             }
-
-            IFluidHandler insertHandler = insertConnection.getSidedCapability(Capabilities.FluidHandler.BLOCK);
-            if (insertHandler == null) {
+            var insert = path.end();
+            var handler = insert.getSidedCapability(Capabilities.FluidHandler.BLOCK);
+            if (handler == null) {
                 continue;
             }
-
-            var fluidToInsert = extractedFluid.copy();
-
-            // Limit to path's max speed
-            if (fluidToInsert.getAmount() > remaining) {
-                fluidToInsert.setAmount(remaining);
+            var stack = insert.inventory().getStackInSlot(FluidConduit.INSERT_FILTER_SLOT);
+            var filter = stack.isEmpty() ? null : stack.getCapability(EnderIOCapabilities.FLUID_FILTER);
+            // The built-in whitelist compares only the resource type/components, independent of amount.
+            if (filter instanceof EnderFluidFilter && filter.test(handler, allowed).isEmpty()) {
+                continue;
             }
-
-            // Test fluid against insert filter.
-            var insertFilter = insertConnection.inventory()
-                .getStackInSlot(FluidConduit.INSERT_FILTER_SLOT)
-                .getCapability(EnderIOCapabilities.FLUID_FILTER);
-
-            if (insertFilter != null) {
-                fluidToInsert = insertFilter.test(insertHandler, fluidToInsert);
-                if (fluidToInsert.isEmpty()) {
+            var candidate = allowed.copyWithAmount(offer);
+            if (filter != null && !(filter instanceof EnderFluidFilter)) {
+                candidate = filter.test(handler, candidate);
+                if (candidate.isEmpty()) {
                     continue;
+                }
+                if (candidate.getAmount() > offer) {
+                    candidate = candidate.copyWithAmount(offer);
                 }
             }
 
-            // Attempt to transfer fluid.
-            FluidStack transferredFluid = FluidUtil.tryFluidTransfer(insertHandler, extractHandler, fluidToInsert,
-                true);
-
-            // Deduct the transferred fluid from our maximum transfer.
-            maxTransfer -= transferredFluid.getAmount();
-
-            // Store the amount transferred in this path
-            insertedPerPath.compute(insertPath, (k, v) -> v == null ? transferredFluid.getAmount() : v + transferredFluid.getAmount());
-
-            if (maxTransfer <= 0) {
-                break;
+            // The source may change after a previous destination or a filter callback.
+            int transferred = FluidUtil.tryFluidTransfer(handler, extractHandler, candidate, true).getAmount();
+            if (transferred > 0) {
+                insertedPerPath.put(path, sent + transferred);
+                maxTransfer -= transferred;
+                available -= transferred;
             }
         }
-
         return maxTransfer;
     }
 }

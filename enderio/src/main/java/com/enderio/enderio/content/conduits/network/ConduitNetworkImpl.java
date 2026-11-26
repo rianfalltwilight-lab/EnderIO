@@ -8,6 +8,7 @@ import com.enderio.enderio.api.conduits.connection.config.IOConnectionConfig;
 import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
 import com.enderio.enderio.api.conduits.connection.path.ConduitConnectionPath;
 import com.enderio.enderio.api.conduits.connection.path.ConnectionPathProperty;
+import com.enderio.enderio.api.conduits.connection.path.PriorityConnectionPathComparator;
 import com.enderio.enderio.api.conduits.network.ConduitNetwork;
 import com.enderio.enderio.api.conduits.network.ConduitNetworkContext;
 import com.enderio.enderio.api.conduits.network.ConduitNetworkContextType;
@@ -15,6 +16,7 @@ import com.enderio.enderio.api.conduits.network.node.ConduitNode;
 import com.enderio.enderio.content.conduits.network.pathing.ConduitPathingStrategy;
 import com.enderio.enderio.content.conduits.network.pathing.PathfindingContext;
 import com.enderio.enderio.content.conduits.network.pathing.BreadthFirstPathingStrategy;
+import com.enderio.enderio.init.EIOConduitTypes;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.HashMultimap;
@@ -43,6 +45,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.ObjLongConsumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -114,6 +118,32 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     @Nullable
     private Consumer<ConduitNetworkImpl> onChunkCoverageChanged = null;
+
+    @Nullable private ObjLongConsumer<ConduitNetworkImpl> onSingleChunkChanged;
+    private boolean persistentDataChanged;
+
+    void markSaveDirty() {
+        persistentDataChanged = true;
+    }
+
+    boolean hasUnsavedData() {
+        if (persistentDataChanged || context != null && context.type().isPersistent()) {
+            return true;
+        }
+        for (var node : nodes()) {
+            if (node.hasUnsavedData()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void acknowledgeSave() {
+        persistentDataChanged = false;
+        for (var node : nodes()) {
+            node.acknowledgeSave();
+        }
+    }
 
     public ConduitNetworkImpl(ConduitType<?, ?> conduitType, ConduitNodeImpl initialNode) {
         super(initialNode);
@@ -190,6 +220,21 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     public void setOnChunkCoverageChanged(Consumer<ConduitNetworkImpl> onChunkCoverageChanged) {
         this.onChunkCoverageChanged = onChunkCoverageChanged;
+        this.onSingleChunkChanged = null;
+    }
+
+    void setChunkTrackingListeners(@Nullable Consumer<ConduitNetworkImpl> allChunks,
+            @Nullable ObjLongConsumer<ConduitNetworkImpl> singleChunk) {
+        onChunkCoverageChanged = allChunks;
+        onSingleChunkChanged = singleChunk;
+    }
+
+    private void notifyChunkChanged(long chunk) {
+        if (onSingleChunkChanged != null) {
+            onSingleChunkChanged.accept(this, chunk);
+        } else if (onChunkCoverageChanged != null) {
+            onChunkCoverageChanged.accept(this);
+        }
     }
 
     // endregion
@@ -322,6 +367,7 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             return (C) context;
         }
 
+        markSaveDirty();
         context = type.factory().get();
         return (C) context;
     }
@@ -385,97 +431,88 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     // region Caching Logic
 
-    private void addTickingNode(ConduitNodeImpl node) {
-        tickingNodes.add(node);
-
-        for (var side : Direction.values()) {
-            if (!node.isConnectedToBlock(side)) {
-                continue;
-            }
-
-            var connection = new ConduitBlockConnection(node, side);
-            endpointConnections.put(node, connection);
-
-            // Add own list of block connection accesses.
-            accessiblePathsByConnection.computeIfAbsent(connection,
-                    k -> new ArrayList<>(endpointConnections.values().size()));
-
-            // Add all paths to both lists
-            for (var accessibleConnection : endpointConnections.values()) {
-                if (accessibleConnection != connection) {
-                    findBestPathTo(connection, accessibleConnection).ifPresent(path -> {
-                        var accessibleConnections = accessiblePathsByConnection.get(connection);
-                        if (!accessibleConnections.contains(path)) {
-                            accessibleConnections.add(path);
-                        }
-
-                        var reverseAccessibleConnections = accessiblePathsByConnection.get(accessibleConnection);
-                        if (!reverseAccessibleConnections.contains(path.reverse())) {
-                            reverseAccessibleConnections.add(path.reverse());
-                        }
-                    });
-                }
-            }
-
-            // Handle IO caching
-            var config = node.getConnectionConfig(side);
-            if (config instanceof IOConnectionConfig ioConnectionConfig) {
-                // First add sending and receiving connections
-                boolean canInsert = ioConnectionConfig.canInsert(node::hasRedstoneSignal);
-                boolean canExtract = ioConnectionConfig.canExtract(node::hasRedstoneSignal);
-
-                if (canInsert) {
-                    insertConnections.add(connection);
-                    insertConnectionsByChannel.put(ioConnectionConfig.insertChannel(), connection);
-                }
-
-                if (canExtract) {
-                    extractConnections.add(connection);
-                    extractConnectionsByChannel.put(ioConnectionConfig.extractChannel(), connection);
-                }
-
-                // Now handle the mappings between them, do it after both are added in case we
-                // can self-feed.
-                if (canInsert) {
-                    for (var accessibleConnection : extractConnectionsByChannel.get(ioConnectionConfig.insertChannel())) {
-                        findBestPathTo(connection, accessibleConnection).ifPresent(path -> {
-                            var extractPaths = extractConnectionsByInsert.computeIfAbsent(connection, k -> new ArrayList<>());
-                            if (!extractPaths.contains(path)) {
-                                extractPaths.add(path);
-                            }
-
-                            var insertPaths = insertConnectionsByExtract.computeIfAbsent(accessibleConnection, k -> new ArrayList<>());
-                            if (!insertPaths.contains(path.reverse())) {
-                                insertPaths.add(path.reverse());
-                            }
-                        });
-                    }
-                }
-
-                if (canExtract) {
-                    for (var accessibleConnection : insertConnectionsByChannel.get(ioConnectionConfig.extractChannel())) {
-                        findBestPathTo(connection, accessibleConnection).ifPresent(path -> {
-                            var insertPaths = insertConnectionsByExtract.computeIfAbsent(connection, k -> new ArrayList<>());
-                            if (!insertPaths.contains(path)) {
-                                insertPaths.add(path);
-                            }
-
-                            var extractPaths = extractConnectionsByInsert.computeIfAbsent(accessibleConnection, k -> new ArrayList<>());
-                            if (!extractPaths.contains(path.reverse())) {
-                                extractPaths.add(path.reverse());
-                            }
-                        });
-                    }
-                }
-            }
-
-            // All lists now require sorting
-            haveConnectionsChanged = true;
+    private record PathPair(ConduitConnectionPath forward, ConduitConnectionPath reverse) {
+        PathPair(ConduitConnectionPath path) {
+            this(path, path.start().equals(path.end()) ? path : path.reverse());
         }
     }
 
-    private Optional<ConduitConnectionPath> findBestPathTo(ConduitBlockConnection from, ConduitBlockConnection to) {
-        return pathfinder.findPath(from, to, this);
+    private void addTickingNode(ConduitNodeImpl node) {
+        tickingNodes.add(node);
+        var connections = new ArrayList<ConduitBlockConnection>();
+        for (var side : Direction.values()) {
+            if (node.isConnectedToBlock(side)) {
+                connections.add(new ConduitBlockConnection(node, side));
+            }
+        }
+        if (connections.isEmpty()) {
+            return;
+        }
+
+        Set<ConduitNode> targets = Sets.newHashSet(endpointConnections.keySet());
+        targets.add(node);
+        var sourcePaths = pathfinder.pathsFrom(node, targets, this);
+        for (var connection : connections) {
+            addConnection(node, connection, sourcePaths);
+        }
+        haveConnectionsChanged = true;
+    }
+
+    private void addConnection(ConduitNodeImpl node, ConduitBlockConnection connection, ConduitPathingStrategy.SourcePaths sourcePaths) {
+        endpointConnections.put(node, connection);
+        var accessible = new ArrayList<ConduitConnectionPath>(endpointConnections.size());
+        accessiblePathsByConnection.put(connection, accessible);
+        Map<ConduitBlockConnection, PathPair> paths = Maps.newHashMap();
+        for (var peer : endpointConnections.values()) {
+            if (peer.equals(connection)) {
+                continue;
+            }
+            sourcePaths.findPath(connection, peer).ifPresent(path -> {
+                var pair = new PathPair(path);
+                paths.put(peer, pair);
+                accessible.add(pair.forward());
+                accessiblePathsByConnection.get(peer).add(pair.reverse());
+            });
+        }
+
+        if (!(node.getConnectionConfig(connection.connectionSide()) instanceof IOConnectionConfig config)) {
+            return;
+        }
+        boolean canInsert = config.canInsert(node::hasRedstoneSignal);
+        boolean canExtract = config.canExtract(node::hasRedstoneSignal);
+        if (canInsert) {
+            insertConnections.add(connection);
+            insertConnectionsByChannel.put(config.insertChannel(), connection);
+        }
+        if (canExtract) {
+            extractConnections.add(connection);
+            extractConnectionsByChannel.put(config.extractChannel(), connection);
+        }
+        if (canInsert && canExtract && config.insertChannel() == config.extractChannel()) {
+            sourcePaths.findPath(connection, connection).ifPresent(path -> paths.put(connection, new PathPair(path)));
+        }
+        if (canInsert) {
+            for (var peer : extractConnectionsByChannel.get(config.insertChannel())) {
+                var pair = paths.get(peer);
+                if (pair != null) {
+                    appendPath(extractConnectionsByInsert, pair.forward());
+                    appendPath(insertConnectionsByExtract, pair.reverse());
+                }
+            }
+        }
+        if (canExtract) {
+            for (var peer : insertConnectionsByChannel.get(config.extractChannel())) {
+                var pair = paths.get(peer);
+                if (pair != null && !peer.equals(connection)) {
+                    appendPath(insertConnectionsByExtract, pair.forward());
+                    appendPath(extractConnectionsByInsert, pair.reverse());
+                }
+            }
+        }
+    }
+
+    private static void appendPath(Map<ConduitBlockConnection, List<ConduitConnectionPath>> index, ConduitConnectionPath path) {
+        index.computeIfAbsent(path.start(), k -> new ArrayList<>()).add(path);
     }
     
     // region PathfindingContext Implementation
@@ -490,46 +527,34 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
     // endregion
 
     private void removeTickingNode(ConduitNodeImpl node) {
-        if (!tickingNodes.contains(node)) {
+        if (!tickingNodes.remove(node)) {
             return;
         }
 
-        tickingNodes.remove(node);
-
-        // Remove connections from any maps
-        for (var connection : endpointConnections.get(node)) {
-            // Remove this connection's maps
+        var removed = endpointConnections.removeAll(node);
+        if (removed.isEmpty()) {
+            return;
+        }
+        for (var connection : removed) {
             accessiblePathsByConnection.remove(connection);
 
-            // Not a fan of having to iterate, but it's probably fine.
+            insertConnections.remove(connection);
+            extractConnections.remove(connection);
             for (var color : DyeColor.values()) {
-                insertConnections.remove(connection);
-                extractConnections.remove(connection);
                 insertConnectionsByChannel.remove(color, connection);
                 extractConnectionsByChannel.remove(color, connection);
             }
 
             extractConnectionsByInsert.remove(connection);
             insertConnectionsByExtract.remove(connection);
-
-            // Remove this connection from other maps
-            for (var list : accessiblePathsByConnection.values()) {
-                list.removeIf(p -> p.start() == connection || p.end() == connection);
-            }
-
-            for (var list : extractConnectionsByInsert.values()) {
-                list.removeIf(p -> p.start() == connection || p.end() == connection);
-            }
-
-            for (var list : insertConnectionsByExtract.values()) {
-                list.removeIf(p -> p.start() == connection || p.end() == connection);
-            }
-
-            haveConnectionsChanged = true;
         }
 
-        // And finally remove all the connections from the main list.
-        endpointConnections.removeAll(node);
+        // The public path lists are mutable, so one endpoint's list cannot identify all its peers.
+        Predicate<ConduitConnectionPath> touchesRemoved = path -> removed.contains(path.end()) || removed.contains(path.start());
+        accessiblePathsByConnection.values().forEach(paths -> paths.removeIf(touchesRemoved));
+        extractConnectionsByInsert.values().forEach(paths -> paths.removeIf(touchesRemoved));
+        insertConnectionsByExtract.values().forEach(paths -> paths.removeIf(touchesRemoved));
+        haveConnectionsChanged = true;
     }
 
     private void updateChannelList() {
@@ -545,16 +570,27 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             extractConnections.sort(basicConnectionComparator);
         }
 
+        var pathComparator = conduitType.connectionPathComparator();
+        if (endpointConnections.size() > 2 && pathComparator instanceof PriorityConnectionPathComparator byPriority
+            && (conduitType == EIOConduitTypes.ITEM.get() || conduitType == EIOConduitTypes.FLUID.get() || conduitType == EIOConduitTypes.ENERGY.get())) {
+            // Built-in priorities read the endpoint's configuration. It stays fixed throughout this cache update.
+            Map<ConduitBlockConnection, Integer> priorities = Maps.newHashMapWithExpectedSize(endpointConnections.size());
+            for (var endpoint : endpointConnections.values()) {
+                priorities.put(endpoint, byPriority.priorityGetter().apply(endpoint));
+            }
+            pathComparator = new PriorityConnectionPathComparator(priorities::get, byPriority.fallbackComparator());
+        }
+
         for (var connectionsList : accessiblePathsByConnection.values()) {
-            connectionsList.sort(conduitType.connectionPathComparator());
+            connectionsList.sort(pathComparator);
         }
 
         for (var connectionsList : extractConnectionsByInsert.values()) {
-            connectionsList.sort(conduitType.connectionPathComparator());
+            connectionsList.sort(pathComparator);
         }
 
         for (var connectionsList : insertConnectionsByExtract.values()) {
-            connectionsList.sort(conduitType.connectionPathComparator());
+            connectionsList.sort(pathComparator);
         }
 
         haveConnectionsChanged = false;
@@ -614,8 +650,8 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
         boolean isNewChunk = !nodesByChunkPos.containsKey(chunk);
         nodesByChunkPos.put(chunk, node);
 
-        if (!isRebuild && isNewChunk && onChunkCoverageChanged != null) {
-            onChunkCoverageChanged.accept(this);
+        if (!isRebuild && isNewChunk) {
+            notifyChunkChanged(chunk);
         }
     }
 
@@ -625,8 +661,8 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
         nodesByChunkPos.remove(chunk, node);
 
         boolean isRemovedChunk = !nodesByChunkPos.containsKey(chunk);
-        if (isRemovedChunk && onChunkCoverageChanged != null) {
-            onChunkCoverageChanged.accept(this);
+        if (isRemovedChunk) {
+            notifyChunkChanged(chunk);
         }
     }
 
@@ -639,8 +675,30 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
         return new ConduitNetworkImpl(conduitType);
     }
 
+    public static void connectAdjacentNodes(ConduitNodeImpl node, ConduitNodeImpl neighbor, Consumer<ConduitNetworkImpl> onDiscard) {
+        var local = node.getNetwork();
+        var adjacent = neighbor.getNetwork();
+        if (local != adjacent && local.nodeCount() == 1 && adjacent.nodeCount() > 1
+            && local.context == null && adjacent.context == null && node.isLoaded() && !hasEndpoint(node)) {
+            // A plain new segment has neither existing routes nor context whose direction must be preserved.
+            adjacent.connect(neighbor, node, onDiscard);
+        } else {
+            local.connect(node, neighbor, onDiscard);
+        }
+    }
+
+    private static boolean hasEndpoint(ConduitNodeImpl node) {
+        for (var side : Direction.values()) {
+            if (node.isConnectedToBlock(side)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     protected void onNodeAdded(ConduitNodeImpl node) {
+        markSaveDirty();
         // Always recompute what conduits can tick - it's cheap to do.
         areTickableConduitsValid = false;
 
@@ -665,16 +723,17 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     @Override
     protected void onNodeRemoved(ConduitNodeImpl node) {
+        markSaveDirty();
         // Always recompute what conduits can tick - it's cheap to do.
         areTickableConduitsValid = false;
 
-        // Remove from node count
-        nodeCountByConduit.compute(node.conduit(), (k, count) -> count == null || count == 1 ? null : count - 1);
-
         if (shouldRebuildCache) {
+            // A split has already recomputed the surviving nodes and excluded the removed node.
+            recomputeNodeCounts();
             return;
         }
 
+        nodeCountByConduit.compute(node.conduit(), (k, count) -> count == null || count == 1 ? null : count - 1);
         removeNodeFromPositionMaps(node);
         if (!shouldRebuildCache) {
             dirtyNodes.add(node);
@@ -682,11 +741,46 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
     }
 
     @Override
+    protected void onNodeRemoved(ConduitNodeImpl node, int degree) {
+        if (degree > 1) {
+            shouldRebuildCache = true;
+        }
+        super.onNodeRemoved(node, degree);
+    }
+
+    @Override
+    protected void onNodesConnected(ConduitNodeImpl first, ConduitNodeImpl second, boolean added) {
+        super.onNodesConnected(first, second, added);
+        if (added) {
+            markSaveDirty();
+            // A new leaf cannot shorten any existing path. A shortcut between old nodes can.
+            if (supportsCaching && !shouldRebuildCache && neighbors(first).size() > 1 && neighbors(second).size() > 1) {
+                shouldRebuildCache = true;
+            }
+        }
+    }
+
+    @Override
+    protected void onNodesDisconnected(ConduitNodeImpl first, ConduitNodeImpl second, boolean removed) {
+        super.onNodesDisconnected(first, second, removed);
+        if (removed) {
+            markSaveDirty();
+            shouldRebuildCache = true;
+        }
+    }
+
+    @Override
     protected void onMerged(ConduitNetworkImpl other) {
+        markSaveDirty();
         if (context != null && other.context != null) {
             context = context.mergeWith(other.castContext());
         } else if (context == null && other.context != null) {
             context = other.context;
+        }
+
+        if (context == null && other.nodeCount() == 1) {
+            onNodeAdded(other.nodes().iterator().next());
+            return;
         }
 
         // Fully recompute node counts
@@ -703,6 +797,7 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     @Override
     protected void onGraphSplit(Set<ConduitNetworkImpl> newNetworks) {
+        markSaveDirty();
         shouldRebuildCache = true;
 
         // Fully recompute node counts

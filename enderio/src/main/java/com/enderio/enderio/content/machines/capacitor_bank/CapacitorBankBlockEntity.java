@@ -26,6 +26,7 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.player.Inventory;
@@ -66,13 +67,32 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
 
     private final CapacitorTier tier;
     private CapacitorBankNode node;
-    private CapacitorBankNetwork oldNetwork;
+    @Nullable private CapacitorBankNetwork.RemovedBankEnergy removedEnergy;
+    private boolean dropSettled;
+    @Nullable private CapacitorBankDisplay clientDisplay;
+
+    public CapacitorBankDisplay clientDisplay() {
+        if (clientDisplay == null) {
+            clientDisplay = new CapacitorBankDisplay(Objects.requireNonNull(level), worldPosition);
+        }
+        return clientDisplay;
+    }
+
+    @Override
+    public void setRemoved() {
+        if (clientDisplay != null) {
+            clientDisplay.removed();
+            clientDisplay = null;
+        }
+        super.setRemoved();
+    }
     private int legacyEnergy = 0;
     private UUID uuid = UUID.randomUUID();
 
     private final Map<Direction, BlockCapabilityCache<IEnergyStorage, Direction>> energyStorageCaches = new EnumMap<>(Direction.class);
     private final Set<SidedEnergy> validPushTargetCache = new HashSet<>();
-    private boolean isValidPushTargetCacheDirty = true;
+    private long pushTargetRevision;
+    private long cachedPushTargetRevision = -1;
 
     private static final ModelProperty<IOConfigurable> IO_CONFIG_PROPERTY = LegacyMachineBlockEntity.IO_CONFIG_PROPERTY;
     private static final String DISPLAY_MODES = "displaymodes";
@@ -107,6 +127,10 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         return node.getNetwork();
     }
 
+    boolean belongsTo(CapacitorBankNetwork network) {
+        return node != null && node.isValid() && node.getNetwork() == network;
+    }
+
     @Override
     public void setLevel(Level level) {
         super.setLevel(level);
@@ -131,16 +155,47 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         }
     }
 
-    public void removeNode() {
-        if (this.node.isValid()) {
-            this.oldNetwork = node.getNetwork(); //Network is still needed for the picked up block
-            this.node.getNetwork().remove(this.node);
+    @Override
+    public void onChunkUnloaded() {
+        if (node != null) {
+            node.detach(this);
         }
+        super.onChunkUnloaded();
+    }
+
+    public void removeNode() {
+        if (node != null && node.isValid()) {
+            var network = node.getNetwork();
+            if (dropSettled) {
+                network.remove(node);
+            } else {
+                removedEnergy = network.removeBank(node);
+            }
+        }
+    }
+
+    int claimDroppedEnergy() {
+        if (dropSettled) {
+            return 0;
+        }
+        dropSettled = true;
+        if (node != null && node.isValid()) {
+            return node.getNetwork().takeEnergyForRemoval(node);
+        }
+        return removedEnergy == null ? 0 : removedEnergy.claim();
+    }
+
+    int previewDropEnergy() {
+        return node != null && node.isValid() ? node.getNetwork().energyForRemoval(node)
+            : removedEnergy == null ? 0 : removedEnergy.wanted();
     }
 
     @Override
     public void onLoad() {
         super.onLoad();
+        if (level.isClientSide()) {
+            clientDisplay();
+        }
 
         // Create all energy caches
         if (!level.isClientSide()) {
@@ -157,7 +212,14 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         super.neighborChanged(neighborBlock, neighborPos);
 
         if (!level.isClientSide()) {
-            isValidPushTargetCacheDirty = true;
+            invalidatePushTargets();
+        }
+    }
+
+    private void invalidatePushTargets() {
+        pushTargetRevision++;
+        if (node != null && node.isValid()) {
+            node.getNetwork().targetsChanged();
         }
     }
 
@@ -166,7 +228,8 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
             throw new IllegalStateException("getValidPushTargets can only be called on the server.");
         }
 
-        if (isValidPushTargetCacheDirty) {
+        long revision = pushTargetRevision;
+        if (cachedPushTargetRevision != revision) {
             validPushTargetCache.clear();
             for (Direction side : Direction.values()) {
                 if (side == Direction.UP) {
@@ -179,7 +242,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
                     getBlockPos().relative(side),
                     side.getOpposite(),
                     () -> !isRemoved(),
-                    () -> isValidPushTargetCacheDirty = true));
+                    this::invalidatePushTargets));
 
                 var energyStorage = cache.getCapability();
                 if (energyStorage != null && !(energyStorage instanceof CapacitorBankEnergyStorage) && energyStorage.canReceive() &&
@@ -187,7 +250,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
                     validPushTargetCache.add(new SidedEnergy(energyStorage, new CapacitorBankNetwork.SidedPos(getBlockPos(), side)));
                 }
             }
-            isValidPushTargetCacheDirty = false;
+            cachedPushTargetRevision = revision;
         }
 
         return validPushTargetCache;
@@ -225,7 +288,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         // Invalidate caps
         level.invalidateCapabilities(worldPosition);
         level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_ALL);
-        isValidPushTargetCacheDirty = true;
+        invalidatePushTargets();
     }
 
     @Override
@@ -350,7 +413,9 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     }
 
     public void setDisplayMode(Direction direction, DisplayMode mode) {
-        displayModes.put(direction, mode);
+        if (displayModes.put(direction, mode) != mode && clientDisplay != null) {
+            clientDisplay.changed();
+        }
     }
 
     public boolean onShiftRightClick(Direction direction, Player player) {
@@ -367,8 +432,8 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
             return false;
         }
 
-        displayModes.put(direction,
-            DisplayMode.values()[(displayModes.get(direction).ordinal() + 1) % DisplayMode.values().length]);
+        setDisplayMode(direction,
+            DisplayMode.values()[(displayModes.getOrDefault(direction, DisplayMode.NONE).ordinal() + 1) % DisplayMode.values().length]);
         setChanged();
         level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
         return true;
@@ -381,6 +446,9 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
 
     @Override
     public @Nullable AbstractContainerMenu createMenu(int i, Inventory inventory, Player player) {
+        if (player instanceof ServerPlayer serverPlayer) {
+            getNetwork().syncBeforeOpeningMenu(serverPlayer);
+        }
         return new CapacitorBankMenu(i, inventory, this);
     }
 
@@ -435,12 +503,18 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     }
 
     public void loadDisplayModes(CompoundTag nbt) {
-        displayModes.clear();
-        for (String key : nbt.getAllKeys()) {
-            @Nullable
-            Direction dir = Direction.byName(key);
-            if (dir != null) {
-                displayModes.put(dir, DisplayMode.values()[nbt.getInt(key)]);
+        var decoded = new EnumMap<Direction, DisplayMode>(Direction.class);
+        for (var key : nbt.getAllKeys()) {
+            var direction = Direction.byName(key);
+            if (direction != null) {
+                decoded.put(direction, DisplayMode.values()[nbt.getInt(key)]);
+            }
+        }
+        if (!displayModes.equals(decoded)) {
+            displayModes.clear();
+            displayModes.putAll(decoded);
+            if (clientDisplay != null) {
+                clientDisplay.changed();
             }
         }
     }
@@ -494,11 +568,10 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
             components.set(EIODataComponents.IO_CONFIG, ioConfig);
         }
 
-        if (oldNetwork != null) { //Network already kicked out the node, so we keep an old ref
-            int energy = oldNetwork.getEnergyForNode(this.tier());
-            if (energy != 0) {
-                components.set(EIODataComponents.ENERGY, energy);
-            }
+        // Level.destroyBlock collects loot before removing the block; player mining collects it afterwards.
+        int energy = previewDropEnergy();
+        if (energy != 0) {
+            components.set(EIODataComponents.ENERGY, energy);
         }
     }
 

@@ -77,7 +77,7 @@ public class PoweredSpawnerBlockEntity extends PoweredMachineBlockEntity impleme
         super(EIOBlockEntities.POWERED_SPAWNER.get(), worldPosition, blockState, true, CapacitorSupport.REQUIRED,
                 EnergyIOMode.Input, CAPACITY, USAGE);
 
-        taskHost = new MachineTaskHost(this, this::hasEnergy) {
+        taskHost = new MachineTaskHost(this, this::hasEnergy, MachineTaskHost.ProgressSync.MENU) {
             @Override
             protected @Nullable MachineTask getNewTask() {
                 return createNewTask();
@@ -309,6 +309,10 @@ public class PoweredSpawnerBlockEntity extends PoweredMachineBlockEntity impleme
 
     // TODO: I want a better way to handle this, but unsure what that could be.
     private void setReason(SpawnerBlockedReason reason) {
+        if (this.reason == reason) {
+            return;
+        }
+
         if (this.reason != SpawnerBlockedReason.NONE) {
             updateMachineState(new MachineState(MachineStateType.ERROR, this.reason.component), false);
         }

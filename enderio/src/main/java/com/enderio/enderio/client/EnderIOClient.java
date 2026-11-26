@@ -2,6 +2,8 @@ package com.enderio.enderio.client;
 
 import com.enderio.core.client.item.FluidBarDecorator;
 import com.enderio.enderio.EnderIO;
+import com.enderio.enderio.content.machines.capacitor_bank.CapacitorBankManager;
+import com.enderio.enderio.content.machines.capacitor_bank.CapacitorBankDisplay;
 import com.enderio.enderio.api.EnderIOAPI;
 import com.enderio.enderio.api.conduits.model.RegisterConduitModelModifiersEvent;
 import com.enderio.enderio.api.conduits.screen.RegisterConduitScreenTypesEvent;
@@ -132,6 +134,8 @@ import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
 import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
 import net.neoforged.neoforge.client.gui.VanillaGuiLayers;
 import net.neoforged.neoforge.common.util.Lazy;
+import net.neoforged.neoforge.event.level.LevelEvent;
+import net.neoforged.neoforge.event.level.ChunkEvent;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -141,6 +145,27 @@ import java.util.Set;
 @EventBusSubscriber(value = Dist.CLIENT)
 @Mod(value = EnderIO.MOD_ID, dist = Dist.CLIENT)
 public class EnderIOClient {
+    @SubscribeEvent
+    public static void capacitorChunkLoaded(ChunkEvent.Load event) {
+        if (event.getLevel() instanceof net.minecraft.client.multiplayer.ClientLevel level) {
+            CapacitorBankDisplay.chunkChanged(level, event.getChunk().getPos());
+        }
+    }
+
+    @SubscribeEvent
+    public static void capacitorChunkUnloaded(ChunkEvent.Unload event) {
+        if (event.getLevel() instanceof net.minecraft.client.multiplayer.ClientLevel level) {
+            CapacitorBankDisplay.chunkChanged(level, event.getChunk().getPos());
+        }
+    }
+
+    @SubscribeEvent
+    public static void forgetCapacitorBanks(LevelEvent.Unload event) {
+        if (event.getLevel().isClientSide()) {
+            CapacitorBankManager.clear();
+        }
+    }
+
 
     private static final Map<Item, ModelResourceLocation> HANG_GLIDER_MODEL_LOCATION = new HashMap<>();
     public static final Map<Item, BakedModel> GLIDER_MODELS = new HashMap<>();
@@ -372,6 +397,7 @@ public class EnderIOClient {
 
     @SubscribeEvent
     public static void bakingCompleted(ModelEvent.BakingCompleted event) {
+        CapacitorBankBER.clearResources();
         GLIDER_MODELS.clear();
         HANG_GLIDER_MODEL_LOCATION.forEach((item, modelRL) -> {
             BakedModel bakedModel = event.getModels().get(modelRL);

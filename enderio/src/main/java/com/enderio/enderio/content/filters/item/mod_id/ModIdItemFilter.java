@@ -2,7 +2,7 @@ package com.enderio.enderio.content.filters.item.mod_id;
 
 import com.enderio.core.common.serialization.OrderedListCodec;
 import com.enderio.core.common.util.EqualityUtil;
-import com.enderio.enderio.api.filter.ItemFilter;
+import com.enderio.enderio.content.filters.item.NonMutatingItemFilter;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.NonNullList;
@@ -17,7 +17,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.List;
 import java.util.Objects;
 
-public record ModIdItemFilter(NonNullList<ItemStack> examples, boolean isDenyList) implements ItemFilter {
+public record ModIdItemFilter(NonNullList<ItemStack> examples, boolean isDenyList) implements NonMutatingItemFilter {
     public static final Codec<ModIdItemFilter> CODEC = RecordCodecBuilder.create(componentInstance -> componentInstance
             .group(OrderedListCodec.create(256, ItemStack.OPTIONAL_CODEC, ItemStack.EMPTY)
                     .fieldOf("examples")
@@ -39,15 +39,14 @@ public record ModIdItemFilter(NonNullList<ItemStack> examples, boolean isDenyLis
 
     @Override
     public ItemStack test(@Nullable IItemHandler target, ItemStack stack) {
-        var testKey = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        String namespace = BuiltInRegistries.ITEM.getKey(stack.getItem()).getNamespace();
 
         for (var example : examples) {
             if (example.isEmpty()) {
                 continue;
             }
 
-            var exampleKey = BuiltInRegistries.ITEM.getKey(example.getItem());
-            if (testKey.getNamespace().equals(exampleKey.getNamespace())) {
+            if (namespace.equals(BuiltInRegistries.ITEM.getKey(example.getItem()).getNamespace())) {
                 return isDenyList ? ItemStack.EMPTY : stack;
             }
         }

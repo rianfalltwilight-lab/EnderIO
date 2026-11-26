@@ -3,12 +3,15 @@ package com.enderio.enderio.content.conduits.network;
 import com.enderio.core.common.graph.INetworkNode;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConnectionStatus;
+import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
 import com.enderio.enderio.api.conduits.connection.config.ConnectionConfig;
 import com.enderio.enderio.api.conduits.connection.config.ConnectionConfigType;
 import com.enderio.enderio.api.conduits.network.node.ConduitNode;
 import com.enderio.enderio.api.conduits.network.node.NodeData;
 import com.enderio.enderio.api.conduits.network.node.NodeDataType;
 import com.enderio.enderio.content.conduits.legacy.ConduitDataContainer;
+import com.enderio.enderio.content.conduits.type.energy.EnergyConduitStorage;
+import com.enderio.enderio.content.conduits.type.item.ItemConduitNodeData;
 import com.google.common.base.Preconditions;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
@@ -68,6 +71,44 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
     @Nullable
     private IConduitNodeAttachment conduitBundle;
 
+    @Nullable
+    private EnergyPort[] energyPorts;
+
+    public record EnergyPort(ConduitBlockConnection connection, EnergyConduitStorage storage) {}
+
+    public EnergyPort energyPort(Direction side) {
+        if (energyPorts == null) {
+            energyPorts = new EnergyPort[Direction.values().length];
+        }
+        int index = side.ordinal();
+        if (energyPorts[index] == null) {
+            energyPorts[index] = new EnergyPort(new ConduitBlockConnection(this, side), new EnergyConduitStorage(side, this));
+        }
+        return energyPorts[index];
+    }
+
+    private long savedItemRevision;
+
+    boolean hasUnsavedData() {
+        if (nodeData instanceof ItemConduitNodeData items) {
+            return items.revision() != savedItemRevision;
+        }
+        // An addon can edit its own data through a retained reference, without raising an event.
+        return nodeData != null && nodeData.type().isPersistent();
+    }
+
+    void acknowledgeSave() {
+        if (nodeData instanceof ItemConduitNodeData items) {
+            savedItemRevision = items.revision();
+        }
+    }
+
+    private void markSaveDirty() {
+        if (network != null) {
+            network.markSaveDirty();
+        }
+    }
+
     public ConduitNodeImpl(Holder<Conduit<?, ?>> conduit, BlockPos pos) {
         this(conduit, pos, (NodeData) null);
     }
@@ -121,6 +162,7 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
     public void setConduitIfNull(Holder<Conduit<?, ?>> conduit) {
         if (this.conduit == null) {
             this.conduit = conduit;
+            markSaveDirty();
         }
     }
 
@@ -137,6 +179,7 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
         }
 
         this.conduitBundle = null;
+        energyPorts = null;
 
         if (network != null) {
             network.onNodeUpdated(this);
@@ -144,6 +187,7 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
     }
 
     public void onConfigChanged() {
+        markSaveDirty();
         if (network != null) {
             network.onNodeUpdated(this);
         }
@@ -181,6 +225,7 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
 
     @Override
     public void markDirty() {
+        markSaveDirty();
         // No-op if we're loading chunks, just in case.
         if (isLoaded()) {
             // noinspection DataFlowIssue
@@ -219,14 +264,17 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
             return (D) nodeData;
         }
 
-        nodeData = type.create();
+        setNodeData(type.create());
         // noinspection unchecked
         return (D) nodeData;
     }
 
     @Override
     public <D extends NodeData> void setNodeData(@Nullable D data) {
-        nodeData = data;
+        if (nodeData != data) {
+            nodeData = data;
+            markSaveDirty();
+        }
     }
 
     // endregion
@@ -311,7 +359,6 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
         Preconditions.checkState(conduitBundle != null, "Conduit node is detached.");
         Preconditions.checkState(conduitBundle.hasLevel(), "Conduit bundle is not attached to a level");
         Preconditions.checkState(conduitBundle.getLevel().isLoaded(pos), "Conduit bundle is not loaded in a loaded chunk");
-        Preconditions.checkState(isLoaded(), "Conduit node is not loaded - more specific error unavailable.");
     }
 
     private void tryCopyLegacyData() {

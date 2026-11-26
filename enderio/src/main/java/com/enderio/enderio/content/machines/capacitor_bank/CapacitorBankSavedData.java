@@ -1,6 +1,5 @@
 package com.enderio.enderio.content.machines.capacitor_bank;
 
-import com.enderio.enderio.foundation.network.packets.ClientBoundRemoveCapacitorBankPacket;
 import com.google.common.base.Preconditions;
 import com.mojang.logging.LogUtils;
 import com.mojang.serialization.Codec;
@@ -9,11 +8,12 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
-import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -27,18 +27,19 @@ import java.util.Set;
 public class CapacitorBankSavedData extends SavedData {
 
     public static final Codec<CapacitorBankSavedData> CODEC = CapacitorBankNetwork.CODEC.listOf()
-        .xmap(CapacitorBankSavedData::new, capacitorBankSavedData -> capacitorBankSavedData.getNetworks().stream().toList());
+        .xmap(CapacitorBankSavedData::new, CapacitorBankSavedData::snapshot);
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private static final String KEY_DATA = "Networks";
+    private static final Factory<CapacitorBankSavedData> FACTORY = new Factory<>(CapacitorBankSavedData::new, CapacitorBankSavedData::load);
 
     private final Set<CapacitorBankNetwork> networks = new HashSet<>();
+    @Nullable private List<CapacitorBankNetwork> snapshot;
     private final Map<BlockPos, CapacitorBankNode> unclaimedNodes = new HashMap<>();
 
     public static CapacitorBankSavedData get(ServerLevel level) {
-        return level.getDataStorage().computeIfAbsent(new Factory<>(CapacitorBankSavedData::new, CapacitorBankSavedData::load),
-            "enderio_capacitor_bank_network");
+        return level.getDataStorage().computeIfAbsent(FACTORY, "enderio_capacitor_bank_network");
     }
 
     public CapacitorBankSavedData() {}
@@ -46,50 +47,63 @@ public class CapacitorBankSavedData extends SavedData {
     private CapacitorBankSavedData(List<CapacitorBankNetwork> networks) {
         this.networks.addAll(networks);
         for (CapacitorBankNetwork network : networks) {
+            network.setOwner(this);
             for (CapacitorBankNode node : network.nodes()) {
                 unclaimedNodes.put(node.getPos(), node);
             }
         }
     }
 
-    private Set<CapacitorBankNetwork> getNetworks() {
-        return networks;
+    private List<CapacitorBankNetwork> snapshot() {
+        if (snapshot == null) {
+            snapshot = List.copyOf(networks);
+        }
+        return snapshot;
     }
 
     @Nullable
     public CapacitorBankNode claimNode(BlockPos pos) {
-        if (unclaimedNodes.containsKey(pos)) {
-            return unclaimedNodes.remove(pos);
-        }
+        return unclaimedNodes.remove(pos);
+    }
 
-        return null;
+    void releaseNode(CapacitorBankNode node) {
+        unclaimedNodes.put(node.getPos(), node);
     }
 
     public static void onNetworkCreated(ServerLevel level, CapacitorBankNetwork network) {
-        get(level).onNetworkCreated(network);
+        get(level).add(network);
     }
 
-    private void onNetworkCreated(CapacitorBankNetwork network) {
+    void add(CapacitorBankNetwork network) {
         Preconditions.checkArgument(network.isValid(), "New network is not valid!");
-        if (!networks.contains(network)) {
-            networks.add(network);
+        if (networks.add(network)) {
+            snapshot = null;
+            network.setOwner(this);
+            setDirty();
         }
     }
 
     public static void onNetworkDiscarded(ServerLevel level, CapacitorBankNetwork network) {
-        get(level).onNetworkDiscarded(network, level);
+        get(level).discard(network);
     }
 
-    private void onNetworkDiscarded(CapacitorBankNetwork network, ServerLevel serverLevel) {
-        // Allow empty or discarded networks here
-        networks.remove(network);
-        PacketDistributor.sendToPlayersInDimension(serverLevel,
-            new ClientBoundRemoveCapacitorBankPacket(network.getUuid()));
+    void discard(CapacitorBankNetwork network) {
+        if (networks.remove(network)) {
+            snapshot = null;
+            network.removeFromViewers();
+            network.setOwner(null);
+            setDirty();
+        }
     }
 
-    @Override
-    public boolean isDirty() {
-        return true;
+    @SubscribeEvent
+    public static void onPlayerChangedDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            var previous = player.serverLevel().getServer().getLevel(event.getFrom());
+            if (previous != null) {
+                get(previous).networks.forEach(network -> network.forgetViewer(player));
+            }
+        }
     }
 
     @SubscribeEvent
@@ -100,17 +114,19 @@ public class CapacitorBankSavedData extends SavedData {
     }
 
     private void tick(ServerLevel serverLevel) {
-        // avoid CME
-        for (CapacitorBankNetwork network : networks.stream().toList()) {
+        var tickNetworks = snapshot();
+        for (CapacitorBankNetwork network : tickNetworks) {
             if (!network.isValid() || network.isEmpty()) {
-                onNetworkDiscarded(serverLevel, network);
+                discard(network);
             } else {
                 network.prepareEnergyToDistribute();
             }
         }
 
-        for (var network : networks) {
-            network.tick(serverLevel);
+        for (var network : tickNetworks) {
+            if (networks.contains(network)) {
+                network.tick(serverLevel);
+            }
         }
 
     }

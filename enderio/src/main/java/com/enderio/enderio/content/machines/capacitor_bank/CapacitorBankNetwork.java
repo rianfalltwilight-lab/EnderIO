@@ -4,21 +4,26 @@ import com.enderio.core.common.graph.Network;
 import com.enderio.enderio.api.io.RedstoneControl;
 import com.enderio.enderio.foundation.network.packets.ClientBoundRemoveCapacitorBankPacket;
 import com.enderio.enderio.foundation.network.packets.ClientBoundSyncCapacitorBankPacket;
+import com.enderio.enderio.foundation.network.packets.ClientboundCapacitorBankValuesPacket;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ChunkMap;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.network.registration.NetworkRegistry;
 import org.jetbrains.annotations.Nullable;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,13 +39,20 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
             .and(graphCodec(i, CapacitorBankNode.CODEC))
             .apply(i, CapacitorBankNetwork::new));
 
-    private UUID uuid = UUID.randomUUID();
+    private final UUID uuid = UUID.randomUUID();
     private RedstoneControl redstoneControl = RedstoneControl.ALWAYS_ACTIVE;
 
     private long totalEnergyStored;
     private long totalMaxEnergyStored;
     private long energyToDistribute;
-    private List<BlockPos> positions = new ArrayList<>();
+    @Nullable private CapacitorBankSavedData owner;
+    @Nullable private List<BlockPos> positions;
+    @Nullable private List<ChunkPos> chunks;
+    @Nullable private List<PushTarget> targets;
+    private long targetRevision;
+    private record View(List<BlockPos> topology, ClientboundCapacitorBankValuesPacket values) {}
+    private final Map<ServerPlayer, View> viewers = new HashMap<>();
+    @Nullable private ClientboundCapacitorBankValuesPacket lastValues;
     private long lastSync;
 
     //Map to keep track if IO for each position and side
@@ -49,7 +61,6 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     public CapacitorBankNetwork(CapacitorBankNode initialNode) {
         super(initialNode);
         totalMaxEnergyStored = initialNode.getMaxEnergyStored();
-        this.positions.add(initialNode.getPos());
     }
 
     public CapacitorBankNetwork(long totalEnergyStored, RedstoneControl redstone, List<CapacitorBankNode> nodes, IndexedEdgeList edges) {
@@ -57,7 +68,6 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
         this.totalEnergyStored = totalEnergyStored;
         this.totalMaxEnergyStored = nodes.stream().mapToLong(CapacitorBankNode::getCapacity).sum(); //Load all nodes with the last know capacity
         this.redstoneControl = redstone;
-        this.positions.addAll(nodes.stream().map(CapacitorBankNode::getPos).toList());
     }
 
     public CapacitorBankNetwork() {
@@ -86,7 +96,32 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     }
 
     public List<BlockPos> positions() {
+        if (positions == null) {
+            positions = nodes().stream().map(CapacitorBankNode::getPos).toList();
+        }
         return positions;
+    }
+
+    void setOwner(@Nullable CapacitorBankSavedData owner) {
+        this.owner = owner;
+    }
+
+    private void changed() {
+        if (owner != null) {
+            owner.setDirty();
+        }
+    }
+
+    private void topologyChanged() {
+        positions = null;
+        chunks = null;
+        targetsChanged();
+        changed();
+    }
+
+    void targetsChanged() {
+        targetRevision++;
+        targets = null;
     }
 
     public long getAddedEnergy() {
@@ -121,6 +156,9 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     }
 
     public void setRedstoneControl(RedstoneControl redstoneControl) {
+        if (this.redstoneControl != redstoneControl) {
+            changed();
+        }
         this.redstoneControl = redstoneControl;
         for (CapacitorBankNode n : nodes()) {
             if (n.hasBlockEntity()) {
@@ -157,11 +195,11 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
         long energyAfter = Math.min(energyBefore + amount, getTotalMaxEnergyStored());
         int result = Math.toIntExact(Mth.clamp(energyAfter - energyBefore, 0, Integer.MAX_VALUE));
 
-        if (!simulate) {
+        if (!simulate && energyBefore != energyAfter) {
             this.totalEnergyStored = energyAfter;
+            changed();
             if (side != null) {
-                long io = energyIO.getOrDefault(new SidedPos(pos, side), 0L);
-                energyIO.put(new SidedPos(pos, side), io + result);
+                energyIO.merge(new SidedPos(pos, side), (long) result, Long::sum);
             }
         }
 
@@ -171,11 +209,11 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     public int extractEnergy(BlockPos pos, @Nullable Direction side, int amount, boolean simulate) {
         long extracted = Math.min(getTotalEnergyStored(), amount);
 
-        if (!simulate) {
+        if (!simulate && extracted != 0) {
             this.totalEnergyStored -= extracted;
+            changed();
             if (side != null) {
-                long io = energyIO.getOrDefault(new SidedPos(pos, side), 0L);
-                energyIO.put(new SidedPos(pos, side), io - extracted);
+                energyIO.merge(new SidedPos(pos, side), -extracted, Long::sum);
             }
         }
 
@@ -191,7 +229,56 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
         long energy = getTotalEnergyStored() / (nodes().size() + 1);
         int toExtract = Math.toIntExact(Math.min(tier.getStorageCapacity(), energy));
         this.totalEnergyStored -= toExtract;
+        if (toExtract != 0) {
+            changed();
+        }
         return toExtract;
+    }
+
+    int energyForRemoval(CapacitorBankNode node) {
+        long remainingCapacity = totalMaxEnergyStored - node.getCapacity();
+        long equalShare = Math.min(node.getCapacity(), totalEnergyStored / nodeCount());
+        return Math.toIntExact(Math.max(equalShare, totalEnergyStored - remainingCapacity));
+    }
+
+    int takeEnergyForRemoval(CapacitorBankNode node) {
+        return extractEnergy(node.getPos(), null, energyForRemoval(node), false);
+    }
+
+    // Mining can remove the node before loot is evaluated. Keep as much energy in the remaining banks
+    // as they can hold, and remember how much was displaced by the lost capacity.
+    RemovedBankEnergy removeBank(CapacitorBankNode node) {
+        int wanted = energyForRemoval(node);
+        int overflow = Math.toIntExact(Math.max(0, totalEnergyStored - (totalMaxEnergyStored - node.getCapacity())));
+        var remaining = new ArrayList<CapacitorBankNetwork>();
+        remove(node, remaining::add);
+        if (!isEmpty()) {
+            remaining.add(this);
+        }
+        return new RemovedBankEnergy(wanted, overflow, remaining);
+    }
+
+    record RemovedBankEnergy(int wanted, int overflow, List<CapacitorBankNetwork> remaining) {
+        int claim() {
+            long stored = 0;
+            for (var network : remaining) {
+                if (network.isValid()) {
+                    stored += network.totalEnergyStored;
+                }
+            }
+            int needed = (int) Math.min(wanted - overflow, stored);
+            int claimed = overflow;
+            for (var network : remaining) {
+                if (needed == 0) break;
+                if (!network.isValid()) continue;
+                long available = network.totalEnergyStored;
+                int amount = (int) proportionalShare(needed, available, stored);
+                claimed += network.extractEnergy(BlockPos.ZERO, null, amount, false);
+                needed -= amount;
+                stored -= available;
+            }
+            return claimed;
+        }
     }
 
     public void tick(ServerLevel serverLevel) {
@@ -199,15 +286,93 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
 
         //Update client IO
         if (serverLevel.getGameTime() % AVERAGE_IO_OVER_X_TICKS == 0) {
-            PacketDistributor.sendToPlayersInDimension(serverLevel,
-                new ClientBoundSyncCapacitorBankPacket(this.getUuid(), this.getTotalEnergyStored(),
-                    this.getTotalMaxEnergyStored(), this.getAddedEnergy()  / AVERAGE_IO_OVER_X_TICKS,
-                    this.getSendEnergy() / AVERAGE_IO_OVER_X_TICKS, this.positions()));
+            var players = serverLevel.players();
+            syncViewers(players.isEmpty() ? Set.of() : findViewers(players, serverLevel.getChunkSource().chunkMap));
             this.reset(serverLevel.getGameTime());
         }
     }
 
-    private long distributeEnergyEvenlyBetween(long availableEnergy, List<CapacitorBankBlockEntity.SidedEnergy> receivers) {
+    Set<ServerPlayer> findViewers(List<ServerPlayer> players, ChunkMap chunkMap) {
+        if (chunks == null) {
+            chunks = positions().stream().map(ChunkPos::new).distinct().toList();
+        }
+        Set<ServerPlayer> result = new HashSet<>();
+        for (var chunk : chunks) {
+            result.addAll(chunkMap.getPlayers(chunk, false));
+        }
+        for (var player : players) {
+            if (player.containerMenu instanceof CapacitorBankMenu menu && menu.getBlockEntity().belongsTo(this)) {
+                result.add(player);
+            }
+        }
+        return result;
+    }
+
+    void syncViewers(Set<ServerPlayer> current) {
+        viewers.keySet().removeIf(player -> {
+            if (current.contains(player)) {
+                return false;
+            }
+            if (!player.hasDisconnected()) {
+                PacketDistributor.sendToPlayer(player, new ClientBoundRemoveCapacitorBankPacket(uuid));
+            }
+            return true;
+        });
+
+        var values = new ClientboundCapacitorBankValuesPacket(uuid, totalEnergyStored, totalMaxEnergyStored,
+            getAddedEnergy() / AVERAGE_IO_OVER_X_TICKS, getSendEnergy() / AVERAGE_IO_OVER_X_TICKS);
+        lastValues = values;
+        if (current.isEmpty()) {
+            return;
+        }
+        var view = new View(positions(), values);
+        for (var player : current) {
+            var previous = viewers.get(player);
+            if (previous == null || previous.topology() != view.topology()) {
+                sendFull(player, view);
+            } else if (!values.equals(previous.values())) {
+                if (NetworkRegistry.hasChannel(player.connection, ClientboundCapacitorBankValuesPacket.TYPE.id())) {
+                    PacketDistributor.sendToPlayer(player, values);
+                    viewers.put(player, view);
+                } else {
+                    sendFull(player, view);
+                }
+            }
+        }
+    }
+
+    void syncBeforeOpeningMenu(ServerPlayer player) {
+        var previous = viewers.get(player);
+        if (previous == null || previous.topology() != positions()) {
+            var values = new ClientboundCapacitorBankValuesPacket(uuid, totalEnergyStored, totalMaxEnergyStored,
+                lastValues == null ? 0 : lastValues.added(), lastValues == null ? 0 : lastValues.send());
+            sendFull(player, new View(positions(), values));
+        }
+    }
+
+    private void sendFull(ServerPlayer player, View view) {
+        var values = view.values();
+        PacketDistributor.sendToPlayer(player, new ClientBoundSyncCapacitorBankPacket(uuid, values.storedEnergy(),
+            values.capacity(), values.added(), values.send(), view.topology()));
+        viewers.put(player, view);
+    }
+
+    void forgetViewer(ServerPlayer player) {
+        if (viewers.remove(player) != null && !player.hasDisconnected()) {
+            PacketDistributor.sendToPlayer(player, new ClientBoundRemoveCapacitorBankPacket(uuid));
+        }
+    }
+
+    void removeFromViewers() {
+        for (var player : viewers.keySet()) {
+            if (!player.hasDisconnected()) {
+                PacketDistributor.sendToPlayer(player, new ClientBoundRemoveCapacitorBankPacket(uuid));
+            }
+        }
+        viewers.clear();
+    }
+
+    private long distributeEnergyEvenlyBetween(long availableEnergy, List<PushTarget> receivers) {
         // Abort if we have no valid pairs
         if (receivers.isEmpty()) {
             return 0;
@@ -217,7 +382,8 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
         long energyRemaining = availableEnergy;
         int toShareWith = receivers.size();
 
-        for (var sided : receivers) {
+        for (var target : receivers) {
+            var sided = target.sided();
             IEnergyStorage receiver = sided.storage();
             // If we have too little energy left, just give it to the first handler that will accept it all
             long shareAmount;
@@ -228,8 +394,9 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
             }
 
             int inserted = receiver.receiveEnergy(Math.clamp(shareAmount, 0, Integer.MAX_VALUE), false);
-            long io = this.energyIO.getOrDefault(sided.sidedPos(), 0L);
-            this.energyIO.put(sided.sidedPos(), io - inserted);
+            if (inserted != 0) {
+                this.energyIO.merge(sided.sidedPos(), -(long) inserted, Long::sum);
+            }
             energyRemaining -= inserted;
 
             toShareWith--;
@@ -242,25 +409,57 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     }
 
     public void distributeEnergy() {
-        if (isRedstoneBlocked()) {
+        long available = Math.min(getEnergyToDistribute(), getTotalEnergyStored());
+        if (available <= 0 || isRedstoneBlocked()) {
             return; //Don't do anything if redstone is blocked
         }
 
-        //Sorted list, so we push to the emptiest first
-        List<CapacitorBankBlockEntity.SidedEnergy> validTargets = new ArrayList<>();
+        long transferred = distributeEnergyEvenlyBetween(available, orderedTargets());
+        if (transferred != 0) {
+            totalEnergyStored -= transferred;
+            changed();
+        }
+    }
 
-        for (CapacitorBankNode node : nodes()) {
-            if (node.hasBlockEntity()) {
-                validTargets.addAll(node.getBlockEntity().getValidPushTargets());
+    private record PushTarget(CapacitorBankBlockEntity.SidedEnergy sided, int originalIndex) {
+        int freeSpace() {
+            return sided.storage().getMaxEnergyStored() - sided.storage().getEnergyStored();
+        }
+    }
+
+    private static final Comparator<PushTarget> TARGET_ORDER = Comparator.comparingInt(PushTarget::freeSpace)
+        .thenComparingInt(PushTarget::originalIndex);
+
+    private List<PushTarget> orderedTargets() {
+        List<PushTarget> snapshot = targets;
+        if (snapshot == null) {
+            long revision = targetRevision;
+            var collected = new ArrayList<PushTarget>();
+            for (var node : createNodeList()) {
+                if (node.hasBlockEntity()) {
+                    for (var sided : node.getBlockEntity().getValidPushTargets()) {
+                        collected.add(new PushTarget(sided, collected.size()));
+                    }
+                }
+            }
+            snapshot = collected;
+            if (revision == targetRevision) {
+                targets = snapshot;
             }
         }
-
-        validTargets.sort(Comparator.comparingInt(
-            c -> c.storage().getMaxEnergyStored() - c.storage().getEnergyStored()
-        ));
-
-        long transferred = distributeEnergyEvenlyBetween(Math.min(getEnergyToDistribute(), getTotalEnergyStored()), validTargets);
-        this.totalEnergyStored = getTotalEnergyStored() - transferred;
+        // Third-party energy buffers can change without invalidating their capability.
+        // Keep the original tie order and retain a stable list if a receiver reenters distribution.
+        for (int i = 1; i < snapshot.size(); i++) {
+            if (TARGET_ORDER.compare(snapshot.get(i - 1), snapshot.get(i)) > 0) {
+                var sorted = new ArrayList<>(snapshot);
+                sorted.sort(TARGET_ORDER);
+                if (targets == snapshot) {
+                    targets = sorted;
+                }
+                return sorted;
+            }
+        }
+        return snapshot;
     }
 
     public void markDirty() {
@@ -273,90 +472,88 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
 
     @Override
     protected void onNodeRemoved(CapacitorBankNode node) {
-        totalMaxEnergyStored = Mth.clamp(totalMaxEnergyStored - node.getMaxEnergyStored(), 0, Long.MAX_VALUE);
-        totalEnergyStored = Mth.clamp(totalEnergyStored,0, getTotalMaxEnergyStored());
-        positions.remove(node.getPos());
+        totalMaxEnergyStored = Mth.clamp(totalMaxEnergyStored - node.getCapacity(), 0, Long.MAX_VALUE);
+        totalEnergyStored = Mth.clamp(totalEnergyStored, 0, totalMaxEnergyStored);
+        topologyChanged();
+        if (isEmpty() && owner != null) {
+            owner.discard(this);
+        }
     }
 
     @Override
     protected void onNodeAdded(CapacitorBankNode node) {
-        if (!node.hasBlockEntity()) {
-            return;
-        }
-
-        totalMaxEnergyStored = Mth.clamp(totalMaxEnergyStored + node.getMaxEnergyStored(),0, Long.MAX_VALUE);
-        if (positions == null) { //This is called in init when it's not ready yet, so just wait
-            return;
-        }
-
-        positions.add(node.getPos());
+        totalMaxEnergyStored = Mth.clamp(totalMaxEnergyStored + node.getCapacity(), 0, Long.MAX_VALUE);
+        topologyChanged();
     }
 
-    //Node has a BE now, update the network
+    @Override
+    protected void onNodesConnected(CapacitorBankNode first, CapacitorBankNode second, boolean added) {
+        if (added) {
+            changed();
+        }
+    }
+
+    @Override
+    protected void onNodesDisconnected(CapacitorBankNode first, CapacitorBankNode second, boolean removed) {
+        if (removed) {
+            changed();
+        }
+    }
+
     public void init(CapacitorBankNode node) {
-        //Change the total capacity to the difference of the stored and the current one.
-        totalMaxEnergyStored = Mth.clamp(totalMaxEnergyStored - node.getCapacity() + node.getMaxEnergyStored(),0, Long.MAX_VALUE);
-        positions.add(node.getPos());
+        int currentCapacity = node.getMaxEnergyStored();
+        if (node.getCapacity() != currentCapacity) {
+            totalMaxEnergyStored = Mth.clamp(totalMaxEnergyStored - node.getCapacity() + currentCapacity, 0, Long.MAX_VALUE);
+            changed();
+        }
+        targetsChanged();
     }
 
     @Override
     protected void onMerged(CapacitorBankNetwork other) {
-        Iterator<CapacitorBankNode> it = other.nodes().iterator();
-
-        if (it.hasNext()) {
-            CapacitorBankNode n = it.next();
-
-            if (n.getBlockEntity().getLevel() instanceof ServerLevel level) {
-                PacketDistributor.sendToPlayersTrackingChunk(level, new ChunkPos(n.getPos()),
-                    new ClientBoundRemoveCapacitorBankPacket(n.getNetwork().getUuid())
-                );
-            }
-        }
-
-        other.uuid = this.uuid;
-        this.totalMaxEnergyStored += other.getTotalMaxEnergyStored();
-        this.totalEnergyStored += other.totalEnergyStored;
+        this.totalMaxEnergyStored += other.totalMaxEnergyStored;
+        this.totalEnergyStored = Mth.clamp(this.totalEnergyStored + other.totalEnergyStored, 0, totalMaxEnergyStored);
         other.totalEnergyStored = 0;
-        this.totalEnergyStored = Mth.clamp(totalEnergyStored,0, getTotalMaxEnergyStored());
-        this.positions.clear();
-        this.positions.addAll(nodes().stream().map(CapacitorBankNode::getPos).toList());
         other.setRedstoneControl(this.redstoneControl);
         other.markDirty();
+        if (other.owner != null) {
+            other.owner.discard(other);
+        }
+        topologyChanged();
     }
 
     @Override
     protected void onGraphSplit(Set<CapacitorBankNetwork> newGraphs) {
-        long energy = this.getTotalEnergyStored();
-        long capacity = this.getTotalMaxEnergyStored();
-        for (CapacitorBankNetwork n : newGraphs) {
-            n.uuid = UUID.randomUUID();
-            n.positions = new ArrayList<>();
-            n.positions.addAll(n.nodes().stream().map(CapacitorBankNode::getPos).toList());
-            n.setRedstoneControl(this.redstoneControl);
-            n.markDirty();
-
-            Iterator<CapacitorBankNode> it = n.nodes().iterator();
-
-            if (it.hasNext()) {
-                CapacitorBankNode node = it.next();
-
-                if (node.getBlockEntity().getLevel() instanceof ServerLevel level) {
-                    CapacitorBankSavedData.onNetworkCreated(level, n);
-                }
+        // During node removal the graph has already dropped the node, but onNodeRemoved runs after this hook.
+        long capacity = nodes().stream().mapToLong(CapacitorBankNode::getCapacity).sum();
+        for (var network : newGraphs) {
+            capacity += network.totalMaxEnergyStored;
+        }
+        long energy = Math.min(totalEnergyStored, capacity);
+        for (var network : newGraphs) {
+            network.setRedstoneControl(redstoneControl);
+            network.markDirty();
+            if (owner != null) {
+                owner.add(network);
             }
-
-            capacity += n.getTotalMaxEnergyStored();
-            this.totalMaxEnergyStored -= n.getTotalMaxEnergyStored();
+            long share = proportionalShare(energy, network.totalMaxEnergyStored, capacity);
+            network.totalEnergyStored = share;
+            energy -= share;
+            capacity -= network.totalMaxEnergyStored;
+            totalMaxEnergyStored -= network.totalMaxEnergyStored;
         }
+        totalEnergyStored = energy;
+        topologyChanged();
+    }
 
-        for (CapacitorBankNetwork n : newGraphs) {
-            long toShare = energy * n.getTotalMaxEnergyStored() / capacity;
-            n.totalEnergyStored = toShare;
-            energy -= toShare;
+    private static long proportionalShare(long energy, long part, long total) {
+        if (part == 0 || energy == 0) {
+            return 0;
         }
-
-        this.positions.addAll(nodes().stream().map(CapacitorBankNode::getPos).toList());
-        this.totalEnergyStored = energy;
+        if (energy <= Long.MAX_VALUE / part) {
+            return energy * part / total;
+        }
+        return BigInteger.valueOf(energy).multiply(BigInteger.valueOf(part)).divide(BigInteger.valueOf(total)).longValueExact();
     }
 
     public record SidedPos(BlockPos pos, @Nullable Direction side) {}

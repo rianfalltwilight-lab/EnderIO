@@ -15,11 +15,14 @@ import com.enderio.enderio.foundation.inventory.MachineInventoryLayout;
 import com.enderio.enderio.init.EIOBlockEntities;
 import com.mojang.authlib.GameProfile;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
 import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.monster.Ghast;
 import net.minecraft.world.entity.monster.Phantom;
@@ -47,6 +50,7 @@ public class AttractorObeliskBlockEntity extends ObeliskBlockEntity<AttractorObe
     private static final LinearScalable RANGE = new LinearScalable(CapacitorModifier.ENERGY_USE,
             MachinesConfig.COMMON.ATTRACTOR_RANGE);
 
+    private static final EntityTypeTest<Entity, Mob> MOB_TYPE = EntityTypeTest.forClass(Mob.class);
     private final Vec3 targetPos;
 
     @UseOnly(LogicalSide.SERVER)
@@ -123,10 +127,10 @@ public class AttractorObeliskBlockEntity extends ObeliskBlockEntity<AttractorObe
         if (filter == null) {
             return;
         }
-        List<Mob> filteredEntities = level.getEntities(EntityTypeTest.forClass(Mob.class), aabb,
-                mob -> filter.test(mob));
+        List<Mob> filteredEntities = level.getEntities(MOB_TYPE, aabb, filter::test);
+        boolean pullBosses = MachinesConfig.COMMON.ATTRACTOR_PULL_BOSSES.get();
         for (Mob mob : filteredEntities) {
-            if (!MachinesConfig.COMMON.ATTRACTOR_PULL_BOSSES.get() && mob.getType().is(Tags.EntityTypes.BOSSES)) {
+            if (!pullBosses && mob.getType().is(Tags.EntityTypes.BOSSES)) {
                 // ignore
             } else if (mob instanceof WitherBoss) {
                 mob.goalSelector.disableControlFlag(Goal.Flag.TARGET);
@@ -154,10 +158,35 @@ public class AttractorObeliskBlockEntity extends ObeliskBlockEntity<AttractorObe
 
     private void attractMob(Mob mob) {
         mob.goalSelector.enableControlFlag(Goal.Flag.MOVE);
-        Vec3 moveOffset = targetPos.subtract(mob.getX(), mob.getY(), mob.getZ());
-        // keep them 1 block away
-        moveOffset = moveOffset.subtract(moveOffset.normalize());
-        mob.getNavigation().moveTo(mob.getX() + moveOffset.x, mob.getY() + moveOffset.y, mob.getZ() + moveOffset.z, 1);
+        // Keep the mob one block away from the obelisk.
+        Vec3 direction = targetPos.subtract(mob.position()).normalize();
+        double x = targetPos.x - direction.x;
+        double y = targetPos.y - direction.y;
+        double z = targetPos.z - direction.z;
+        var navigation = mob.getNavigation();
+        if (navigation.getClass() == GroundPathNavigation.class && navigation.isInProgress() && mob.onGround()
+                && mob.getY() >= mob.level().getMinBuildHeight() && isCurrentGroundTarget(mob, x, y, z)) {
+            // Retain vanilla's speed, trimming and stuck timer updates on the same path.
+            navigation.moveTo(navigation.getPath(), 1);
+        } else {
+            navigation.moveTo(x, y, z, 1);
+        }
+    }
+
+    private boolean isCurrentGroundTarget(Mob mob, double x, double y, double z) {
+        BlockPos target = mob.getNavigation().getTargetPos();
+        if (target == null || !target.equals(BlockPos.containing(x, y, z))) {
+            return false;
+        }
+        var level = mob.level();
+        var chunk = level.getChunkSource().getChunkNow(SectionPos.blockToSectionCoord(target.getX()),
+                SectionPos.blockToSectionCoord(target.getZ()));
+        if (chunk == null || target.getY() <= level.getMinBuildHeight() + 1) {
+            return false;
+        }
+        // GroundPathNavigation shifts solid or unsupported targets vertically before comparing paths.
+        var state = chunk.getBlockState(target);
+        return !state.isSolid() && (!state.isAir() || !chunk.getBlockState(target.below()).isAir());
     }
 
     private void directPull(LivingEntity mob, float speed) {

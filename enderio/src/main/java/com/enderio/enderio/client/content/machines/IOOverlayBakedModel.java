@@ -7,11 +7,11 @@ import com.enderio.enderio.client.foundation.model.ModelRenderUtil;
 import com.enderio.enderio.foundation.block.entity.legacy.LegacyMachineBlockEntity;
 import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonObject;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.ItemOverrides;
-import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.client.resources.model.Material;
@@ -32,8 +32,6 @@ import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.function.Function;
 
@@ -43,58 +41,73 @@ public class IOOverlayBakedModel implements IDynamicBakedModel {
     public static final ResourceLocation TEX_PUSH = EnderIO.rl("block/overlay/push");
     public static final ResourceLocation TEX_PUSH_PULL = EnderIO.rl("block/overlay/push_pull");
 
-    private static final EnumMap<Direction, Vector3f[]> QUADS = new EnumMap<>(Direction.class);
+    private static final Direction[] DIRECTIONS = Direction.values();
+    private static final IOMode[] MODES = IOMode.values();
     private static final ChunkRenderTypeSet CUTOUT_SET = ChunkRenderTypeSet.of(RenderType.cutout());
-
-    static {
-        for (Direction dir : Direction.values()) {
-            QUADS.put(dir, ModelRenderUtil.createQuadVerts(dir, 0.0625f, 1 - 0.0625f, 1.0001f));
-        }
-    }
-
-    private TextureAtlasSprite getTexture(IOMode state) {
-        ResourceLocation tex = switch (state) {
-        case NONE -> MissingTextureAtlasSprite.getLocation();
-        case PUSH -> TEX_PUSH;
-        case PULL -> TEX_PULL;
-        case BOTH -> TEX_PUSH_PULL;
-        case DISABLED -> TEX_DISABLED;
-        };
-
-        return Minecraft.getInstance().getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(tex);
-    }
-
-    private final Direction north;
+    private final BakedQuad[][] quads = new BakedQuad[DIRECTIONS.length][MODES.length];
+    private final Int2ObjectOpenHashMap<List<BakedQuad>> overlays = new Int2ObjectOpenHashMap<>();
 
     public IOOverlayBakedModel(ModelState modelState) {
-        this.north = Direction.rotate(modelState.getRotation().getMatrix(), Direction.NORTH);
+        this(material -> Minecraft.getInstance().getTextureAtlas(material.atlasLocation()).apply(material.texture()));
+    }
+
+    private IOOverlayBakedModel(Function<Material, TextureAtlasSprite> spriteGetter) {
+        for (Direction direction : DIRECTIONS) {
+            Vector3f[] vertices = ModelRenderUtil.createQuadVerts(direction, 0.0625f, 1 - 0.0625f, 1.0001f);
+            for (IOMode mode : MODES) {
+                if (mode == IOMode.NONE) {
+                    continue;
+                }
+
+                ResourceLocation texture = switch (mode) {
+                    case PUSH -> TEX_PUSH;
+                    case PULL -> TEX_PULL;
+                    case BOTH -> TEX_PUSH_PULL;
+                    case DISABLED -> TEX_DISABLED;
+                    default -> throw new IllegalStateException("Unexpected overlay mode " + mode);
+                };
+                var sprite = spriteGetter.apply(new Material(InventoryMenu.BLOCK_ATLAS, texture));
+                quads[direction.ordinal()][mode.ordinal()] = ModelRenderUtil.createQuad(vertices, sprite);
+            }
+        }
     }
 
     @Override
     public List<BakedQuad> getQuads(@Nullable BlockState state, @Nullable Direction side, RandomSource rand,
             ModelData extraData, @Nullable RenderType renderType) {
-        if (extraData.has(LegacyMachineBlockEntity.IO_CONFIG_PROPERTY)) {
-            // Get io config from the block entity.
-            IOConfigurable config = extraData.get(LegacyMachineBlockEntity.IO_CONFIG_PROPERTY);
-            if (config != null && config.shouldRenderIOConfigOverlay()) {
-                // Build a list of quads
-                List<BakedQuad> quads = new ArrayList<>();
-
-                // Get all states for each direction. If its not "None" then we render an
-                // overlay quad.
-                for (Direction dir : Direction.values()) {
-                    IOMode mode = config.getIOMode(dir);
-                    if (mode != IOMode.NONE) {
-                        Vector3f[] verts = QUADS.get(dir);
-                        quads.add(ModelRenderUtil.createQuad(verts, getTexture(mode)));
-                    }
-                }
-
-                return quads;
-            }
+        if (side != null) {
+            return List.of();
+        }
+        IOConfigurable config = extraData.get(LegacyMachineBlockEntity.IO_CONFIG_PROPERTY);
+        if (config == null || !config.shouldRenderIOConfigOverlay()) {
+            return List.of();
         }
 
-        return Collections.emptyList();
+        int key = 0;
+        for (Direction direction : DIRECTIONS) {
+            key |= config.getIOMode(direction).ordinal() << (3 * direction.ordinal());
+        }
+        if (key == 0) {
+            return List.of();
+        }
+        return getOverlay(key);
+    }
+
+    // Chunk builders share baked models. Cache only configurations actually seen during this bake.
+    private synchronized List<BakedQuad> getOverlay(int key) {
+        var cached = overlays.get(key);
+        if (cached == null) {
+            var faces = new ArrayList<BakedQuad>(DIRECTIONS.length);
+            for (Direction direction : DIRECTIONS) {
+                var quad = quads[direction.ordinal()][(key >>> (3 * direction.ordinal())) & 7];
+                if (quad != null) {
+                    faces.add(quad);
+                }
+            }
+            cached = List.copyOf(faces);
+            overlays.put(key, cached);
+        }
+        return cached;
     }
 
     @Override
@@ -136,7 +149,7 @@ public class IOOverlayBakedModel implements IDynamicBakedModel {
         @Override
         public BakedModel bake(IGeometryBakingContext context, ModelBaker baker,
                 Function<Material, TextureAtlasSprite> spriteGetter, ModelState modelState, ItemOverrides overrides) {
-            return new IOOverlayBakedModel(modelState);
+            return new IOOverlayBakedModel(spriteGetter);
         }
     }
 

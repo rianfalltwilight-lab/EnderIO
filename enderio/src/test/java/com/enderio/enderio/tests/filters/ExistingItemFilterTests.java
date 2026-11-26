@@ -1,5 +1,6 @@
 package com.enderio.enderio.tests.filters;
 
+import net.neoforged.neoforge.items.ItemStackHandler;
 import com.enderio.enderio.content.filters.item.existing.ExistingItemFilter;
 import net.minecraft.core.NonNullList;
 import net.minecraft.world.item.ItemStack;
@@ -72,5 +73,20 @@ public class ExistingItemFilterTests {
 
         Assertions.assertEquals(filter1, filter2);
         Assertions.assertEquals(filter1.hashCode(), filter2.hashCode());
+    }
+
+    @Test
+    void liveFilterSeesHandlerMutationWhileSnapshotKeepsItsContents() {
+        var samples = NonNullList.of(ItemStack.EMPTY, new ItemStack(Items.SAND));
+        var live = new ExistingItemFilter(false, samples, false, false);
+        var snapshot = new ExistingItemFilter(true, samples, false, false);
+        var target = new ItemStackHandler(1);
+        var sand = new ItemStack(Items.SAND);
+        Assertions.assertTrue(live.test(target, sand).isEmpty());
+        target.setStackInSlot(0, sand.copy());
+        Assertions.assertFalse(live.test(target, sand).isEmpty());
+        target.extractItem(0, 1, false);
+        Assertions.assertTrue(live.test(target, sand).isEmpty());
+        Assertions.assertFalse(snapshot.test(target, sand).isEmpty());
     }
 }

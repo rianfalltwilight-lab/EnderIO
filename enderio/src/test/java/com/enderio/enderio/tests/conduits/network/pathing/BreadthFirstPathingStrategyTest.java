@@ -4,6 +4,8 @@ import com.enderio.enderio.api.EnderIORegistries;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
 import com.enderio.enderio.api.conduits.connection.path.ConnectionPathProperty;
+import com.enderio.enderio.api.conduits.connection.path.SpeedAndTickRatePair;
+import com.enderio.enderio.api.conduits.network.node.ConduitNode;
 import com.enderio.enderio.content.conduits.network.pathing.BreadthFirstPathingStrategy;
 import com.enderio.enderio.init.EIOConduits;
 import net.minecraft.core.Direction;
@@ -14,6 +16,10 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
 @ExtendWith(EphemeralTestServerProvider.class)
 public class BreadthFirstPathingStrategyTest {
@@ -315,5 +321,84 @@ public class BreadthFirstPathingStrategyTest {
         Assertions.assertTrue(pathCtoA.isPresent(), "Reverse path should exist");
         Assertions.assertEquals(pathAtoC.get().length(), pathCtoA.get().length(),
             "Forward and reverse paths should have same length");
+    }
+
+    @Test
+    void orderedPropertyUsesTheFirstShortestBranch() {
+        var property = new ConnectionPathProperty<String>(values -> Optional.of(String.join("/", values)), "");
+        var context = new FakePathfindingContext();
+        var a = context.createNode("a", testConduit);
+        var b = context.createNode("b", testConduit);
+        var c = context.createNode("c", testConduit);
+        var d = context.createNode("d", testConduit);
+        a.setPathProperty(property, "a");
+        b.setPathProperty(property, "b");
+        c.setPathProperty(property, "c");
+        d.setPathProperty(property, "d");
+        context.addEdge(a, b);
+        context.addEdge(a, c);
+        context.addEdge(b, d);
+        context.addEdge(c, d);
+        var from = new ConduitBlockConnection(a, Direction.NORTH);
+        var to = new ConduitBlockConnection(d, Direction.SOUTH);
+        var firstBranch = context.neighbors(a).iterator().next() == b ? "b" : "c";
+        var returnBranch = context.neighbors(d).iterator().next() == b ? "b" : "c";
+
+        var forward = pathfinder.findPath(from, to, context).orElseThrow();
+        var back = pathfinder.findPath(to, from, context).orElseThrow();
+
+        Assertions.assertEquals("a/" + firstBranch + "/d", forward.property(property));
+        Assertions.assertEquals(forward.property(property), forward.reverse().property(property));
+        Assertions.assertEquals("d/" + returnBranch + "/a", back.property(property));
+    }
+
+    @Test
+    void reusablePropertyMapIsReadAtEachVisitIncludingNullOnAnIntermediateNode() {
+        var property = new ConnectionPathProperty<String>(values -> Optional.of(String.join("/", values)), "");
+        var context = new FakePathfindingContext() {
+            private final Map<ConnectionPathProperty<?>, Object> scratch = new HashMap<>();
+
+            @Override
+            public Map<ConnectionPathProperty<?>, Object> collectNodeProperties(ConduitNode node) {
+                scratch.clear();
+                String value = switch (node.pos().getX()) {
+                    case 0 -> "start";
+                    case 1 -> null;
+                    default -> "end";
+                };
+                scratch.put(property, value);
+                return scratch;
+            }
+        };
+        var a = context.createNode("a", testConduit);
+        var b = context.createNode("b", testConduit);
+        var c = context.createNode("c", testConduit);
+        context.addEdge(a, b);
+        context.addEdge(b, c);
+        var from = new ConduitBlockConnection(a, Direction.NORTH);
+        var middle = new ConduitBlockConnection(b, Direction.NORTH);
+        var to = new ConduitBlockConnection(c, Direction.SOUTH);
+
+        Assertions.assertEquals("start/null/end", pathfinder.findPath(from, to, context).orElseThrow().property(property));
+        Assertions.assertThrows(NullPointerException.class, () -> pathfinder.findPath(middle, to, context));
+    }
+
+    @Test
+    void equalAdjustedRatesKeepTheFirstPairOnThePath() {
+        var property = SpeedAndTickRatePair.minProperty(SpeedAndTickRatePair.ZERO);
+        var context = new FakePathfindingContext();
+        var a = context.createNode("a", testConduit);
+        var b = context.createNode("b", testConduit);
+        var c = context.createNode("c", testConduit);
+        var first = new SpeedAndTickRatePair(4, 10);
+        var last = new SpeedAndTickRatePair(8, 20);
+        a.setPathProperty(property, first);
+        c.setPathProperty(property, last);
+        context.addEdge(a, b);
+        context.addEdge(b, c);
+        var from = new ConduitBlockConnection(a, Direction.NORTH);
+        var to = new ConduitBlockConnection(c, Direction.SOUTH);
+        Assertions.assertSame(first, pathfinder.findPath(from, to, context).orElseThrow().property(property));
+        Assertions.assertSame(last, pathfinder.findPath(to, from, context).orElseThrow().property(property));
     }
 }

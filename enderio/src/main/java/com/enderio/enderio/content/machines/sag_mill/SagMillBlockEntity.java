@@ -67,7 +67,7 @@ public class SagMillBlockEntity extends PoweredMachineBlockEntity {
                 EnergyIOMode.Input, CAPACITY, USAGE);
 
         craftingTaskHost = new CraftingMachineTaskHost<>(this, this::hasEnergy, EIORecipes.SAG_MILLING.type().get(),
-                this::createTask, this::createRecipeInput);
+                this::createTask, this::createRecipeInput, CraftingMachineTaskHost.ProgressSync.MENU);
     }
 
     public GrindingBallData getGrindingBallData() {

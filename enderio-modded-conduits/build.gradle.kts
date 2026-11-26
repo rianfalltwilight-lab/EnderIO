@@ -107,6 +107,7 @@ dependencies {
 
     // Unit tests
     testImplementation(libs.junitJupiter)
+    testImplementation(libs.mockito)
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation(libs.neoforgeTestFramework)
 

@@ -2,7 +2,7 @@ package com.enderio.enderio.content.filters.item.limited;
 
 import com.enderio.core.common.serialization.OrderedListCodec;
 import com.enderio.core.common.util.EqualityUtil;
-import com.enderio.enderio.api.filter.ItemFilter;
+import com.enderio.enderio.content.filters.item.NonMutatingItemFilter;
 import com.enderio.enderio.api.filter.ItemFilterContext;
 import com.enderio.enderio.api.filter.ItemFilterDirection;
 import com.enderio.enderio.content.filters.item.ItemFilterUtils;
@@ -32,7 +32,7 @@ import java.util.Objects;
  * retains {@code limit} of that item.
  */
 public record LimitedItemFilter(NonNullList<ItemStack> matches, boolean shouldCompareComponents,
-        DamageFilterMode damageFilterMode) implements ItemFilter, TooltipComponent {
+        DamageFilterMode damageFilterMode) implements NonMutatingItemFilter, TooltipComponent {
 
     public static final int SLOT_COUNT = 18;
 
@@ -99,17 +99,24 @@ public record LimitedItemFilter(NonNullList<ItemStack> matches, boolean shouldCo
             int limit = match.getCount();
 
             // Count how many matching items are currently in the target
-            int currentCount = 0;
+            long currentCount = 0;
+            boolean inserting = targetContext.direction() == ItemFilterDirection.INSERT;
             for (int i = 0; i < targetContext.target().getSlots(); i++) {
                 ItemStack inSlot = targetContext.target().getStackInSlot(i);
                 if (!inSlot.isEmpty() && ItemStack.isSameItem(match, inSlot)) {
                     if (!shouldCompareComponents || ItemFilterUtils.doComponentsMatch(match, inSlot)) {
                         currentCount += inSlot.getCount();
+                        if (inserting && currentCount >= limit) {
+                            return ItemStack.EMPTY;
+                        }
+                        if (!inserting && currentCount - limit >= stack.getCount()) {
+                            return stack;
+                        }
                     }
                 }
             }
 
-            int available = targetContext.direction() == ItemFilterDirection.INSERT
+            long available = inserting
                 ? limit - currentCount
                 : currentCount - limit;
 
@@ -117,7 +124,7 @@ public record LimitedItemFilter(NonNullList<ItemStack> matches, boolean shouldCo
                 return ItemStack.EMPTY;
             }
 
-            return stack.copyWithCount(Math.min(stack.getCount(), available));
+            return available >= stack.getCount() ? stack : stack.copyWithCount((int) available);
         }
 
         // Whitelist only: deny items not found in filter

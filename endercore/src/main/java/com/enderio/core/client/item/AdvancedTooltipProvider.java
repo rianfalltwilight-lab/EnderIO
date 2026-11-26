@@ -5,6 +5,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public interface AdvancedTooltipProvider {
@@ -36,4 +37,27 @@ public interface AdvancedTooltipProvider {
     default void addDetailedTooltips(ItemStack itemStack, @Nullable Player player, List<Component> tooltips) {
     }
 
+    /** Whether to display the Shift hint. Existing providers can supply conditional lines based on the player. */
+    default boolean hasDetailedTooltip(ItemStack itemStack, @Nullable Player player) {
+        if (!TooltipOverrides.DETAILED.get(getClass())) {
+            return false;
+        }
+        var details = new ArrayList<Component>();
+        addDetailedTooltips(itemStack, player, details);
+        return !details.isEmpty();
+    }
+}
+
+class TooltipOverrides {
+    static final ClassValue<Boolean> DETAILED = new ClassValue<>() {
+        @Override
+        protected Boolean computeValue(Class<?> type) {
+            try {
+                return type.getMethod("addDetailedTooltips", ItemStack.class, Player.class, List.class)
+                        .getDeclaringClass() != AdvancedTooltipProvider.class;
+            } catch (NoSuchMethodException e) {
+                throw new AssertionError(e);
+            }
+        }
+    };
 }

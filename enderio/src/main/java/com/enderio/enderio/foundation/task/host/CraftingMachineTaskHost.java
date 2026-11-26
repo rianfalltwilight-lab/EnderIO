@@ -23,6 +23,8 @@ public class CraftingMachineTaskHost<R extends MachineRecipe<T>, T extends Recip
     private final RecipeType<R> recipeType;
     private final CraftingMachineTaskFactory<? extends CraftingMachineTask<R, T>, R, T> taskFactory;
     private final Supplier<T> recipeInputSupplier;
+    @Nullable
+    private Optional<RecipeHolder<R>> checkedRecipe;
 
     /**
      * This should be constructed in the constructor of your block entity.
@@ -30,7 +32,13 @@ public class CraftingMachineTaskHost<R extends MachineRecipe<T>, T extends Recip
     public CraftingMachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask,
             RecipeType<R> recipeType, CraftingMachineTaskFactory<? extends CraftingMachineTask<R, T>, R, T> taskFactory,
             Supplier<T> recipeInputSupplier) {
-        super(blockEntity, canAcceptNewTask);
+        this(blockEntity, canAcceptNewTask, recipeType, taskFactory, recipeInputSupplier, ProgressSync.TRACKING_CHUNK);
+    }
+
+    public CraftingMachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask,
+            RecipeType<R> recipeType, CraftingMachineTaskFactory<? extends CraftingMachineTask<R, T>, R, T> taskFactory,
+            Supplier<T> recipeInputSupplier, ProgressSync progressSync) {
+        super(blockEntity, canAcceptNewTask, progressSync);
         this.recipeType = recipeType;
         this.taskFactory = taskFactory;
         this.recipeInputSupplier = recipeInputSupplier;
@@ -45,12 +53,23 @@ public class CraftingMachineTaskHost<R extends MachineRecipe<T>, T extends Recip
     // region MachineTaskHost Implementation
 
     @Override
+    protected void refreshTask() {
+        try {
+            super.refreshTask();
+        } finally {
+            // The result is valid only for this input notification, including overridden machine checks.
+            checkedRecipe = null;
+        }
+    }
+
+    @Override
     protected @Nullable CraftingMachineTask<R, T> getNewTask() {
         if (getLevel() == null) {
             return null;
         }
 
-        return findRecipe().map(r -> taskFactory.createTask(getLevel(), recipeInputSupplier.get(), r)).orElse(null);
+        var recipe = checkedRecipe != null ? checkedRecipe : findRecipe();
+        return recipe.map(r -> taskFactory.createTask(getLevel(), recipeInputSupplier.get(), r)).orElse(null);
     }
 
     @Override
@@ -71,8 +90,8 @@ public class CraftingMachineTaskHost<R extends MachineRecipe<T>, T extends Recip
         }
 
         // If recipe has changed
-        var currentRecipe = findRecipe();
-        return currentRecipe.map(r -> !r.value().equals(getCurrentTask().getRecipe())).orElse(true);
+        checkedRecipe = findRecipe();
+        return checkedRecipe.map(r -> !r.value().equals(getCurrentTask().getRecipe())).orElse(true);
     }
 
     // endregion

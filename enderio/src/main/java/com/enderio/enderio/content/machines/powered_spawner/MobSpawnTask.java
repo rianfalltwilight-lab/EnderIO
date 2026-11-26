@@ -2,7 +2,9 @@ package com.enderio.enderio.content.machines.powered_spawner;
 
 import com.enderio.enderio.config.machines.MachinesConfig;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
@@ -23,6 +25,8 @@ import java.util.UUID;
 
 @EventBusSubscriber(bus = EventBusSubscriber.Bus.GAME)
 public class MobSpawnTask extends PoweredSpawnerTask {
+
+    private static final String MOVABLE_TAG = "enderio:movable";
 
     private float efficiency = 1;
 
@@ -57,14 +61,33 @@ public class MobSpawnTask extends PoweredSpawnerTask {
             return false;
         }
 
-        long count = BlockPos.betweenClosedStream(range)
-                .filter(pos -> blockEntity.getLevel().getBlockEntity(pos) instanceof PoweredSpawnerBlockEntity)
-                .count();
+        int count = countSpawners((ServerLevel) blockEntity.getLevel(), range);
         if (count >= MachinesConfig.COMMON.MAX_SPAWNERS.get()) {
             this.efficiency = MachinesConfig.COMMON.MAX_SPAWNERS.get() / (float) count;
         }
 
         return true;
+    }
+
+    static int countSpawners(ServerLevel level, AABB range) {
+        int minX = Mth.floor(range.minX), maxX = Mth.floor(range.maxX);
+        int minY = Mth.floor(range.minY), maxY = Mth.floor(range.maxY);
+        int minZ = Mth.floor(range.minZ), maxZ = Mth.floor(range.maxZ);
+        int count = 0;
+        for (int x = SectionPos.blockToSectionCoord(minX); x <= SectionPos.blockToSectionCoord(maxX); x++) {
+            for (int z = SectionPos.blockToSectionCoord(minZ); z <= SectionPos.blockToSectionCoord(maxZ); z++) {
+                // Includes packed block entities that have not been instantiated since chunk load.
+                var chunk = level.getChunk(x, z);
+                for (BlockPos pos : chunk.getBlockEntitiesPos()) {
+                    if (pos.getX() >= minX && pos.getX() <= maxX && pos.getY() >= minY && pos.getY() <= maxY
+                            && pos.getZ() >= minZ && pos.getZ() <= maxZ
+                            && level.getBlockEntity(pos) instanceof PoweredSpawnerBlockEntity) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
     }
 
     public void trySpawnEntity(BlockPos pos, ServerLevel level) {
@@ -117,7 +140,7 @@ public class MobSpawnTask extends PoweredSpawnerTask {
                 if (entity instanceof Mob mob) { // based on vanilla spawner
                     if (blockEntity.hasMindKiller()) {
                         mob.setNoAi(true);
-                        mob.getPersistentData().putBoolean("enderio:movable", true);
+                        mob.getPersistentData().putBoolean(MOVABLE_TAG, true);
                     }
                     FinalizeSpawnEvent event = EventHooks.finalizeMobSpawnSpawner(mob, level,
                             level.getCurrentDifficultyAt(pos), MobSpawnType.SPAWNER, null, blockEntity, false);
@@ -152,7 +175,7 @@ public class MobSpawnTask extends PoweredSpawnerTask {
     @SubscribeEvent
     public static void tickNoAIMobs(EntityTickEvent.Pre e) {
         if (e.getEntity() instanceof Mob mob) {
-            if (!mob.level().isClientSide() && mob.isNoAi() && mob.getPersistentData().getBoolean("enderio:movable")) {
+            if (!mob.level().isClientSide() && mob.isNoAi() && mob.getPersistentData().getBoolean(MOVABLE_TAG)) {
                 mob.setNoAi(false);
                 mob.travel(new Vec3(mob.xxa, mob.yya, mob.zza));
                 mob.setNoAi(true);

@@ -6,8 +6,7 @@ import com.enderio.enderio.api.conduits.network.ConduitNetworkContextType;
 import com.enderio.enderio.api.filter.RedstoneOutputFilterContext;
 import net.minecraft.world.item.DyeColor;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Arrays;
 import java.util.Set;
 
 public class RedstoneConduitNetworkContext implements ConduitNetworkContext<RedstoneConduitNetworkContext>, RedstoneOutputFilterContext {
@@ -18,17 +17,13 @@ public class RedstoneConduitNetworkContext implements ConduitNetworkContext<Reds
             RedstoneConduitNetworkContext::new);
 
     private boolean isActive;
-    private final Map<DyeColor, Integer> previousChannelSignals = new HashMap<>();
-    private Map<DyeColor, Integer> channelSignals = new HashMap<>();
+    private static final int CHANNEL_COUNT = DyeColor.values().length;
+    private int[] previousChannelSignals = new int[CHANNEL_COUNT];
+    private int[] channelSignals = new int[CHANNEL_COUNT];
 
     private NewNetworkDelay newNetworkDelay = NewNetworkDelay.NEW;
 
     public RedstoneConduitNetworkContext() {
-    }
-
-    private RedstoneConduitNetworkContext(boolean isActive, HashMap<DyeColor, Integer> channelSignals) {
-        this.isActive = isActive;
-        this.channelSignals = channelSignals;
     }
 
     public boolean isNew() {
@@ -40,16 +35,16 @@ public class RedstoneConduitNetworkContext implements ConduitNetworkContext<Reds
     }
 
     public boolean isActive(DyeColor color) {
-        return channelSignals.containsKey(color);
+        return getSignal(color) > 0;
     }
 
     public int getSignal(DyeColor color) {
-        return channelSignals.getOrDefault(color, 0);
+        return channelSignals[color.ordinal()];
     }
 
     // Used for change detection in the ticker.
     public int getSignalLastTick(DyeColor color) {
-        return previousChannelSignals.getOrDefault(color, 0);
+        return previousChannelSignals[color.ordinal()];
     }
 
     public void nextTick() {
@@ -60,20 +55,18 @@ public class RedstoneConduitNetworkContext implements ConduitNetworkContext<Reds
         }
 
         // Save for change detection
-        for (DyeColor color : DyeColor.values()) {
-            previousChannelSignals.put(color, getSignal(color));
-        }
-
-        channelSignals.clear();
+        var reusable = previousChannelSignals;
+        previousChannelSignals = channelSignals;
+        channelSignals = reusable;
+        Arrays.fill(channelSignals, 0);
         isActive = false;
     }
 
     public void setSignal(DyeColor color, int signal) {
-        if (getSignal(color) < signal) {
-            channelSignals.put(color, signal);
+        if (signal > getSignal(color)) {
+            channelSignals[color.ordinal()] = signal;
+            isActive = true;
         }
-
-        isActive = channelSignals.values().stream().anyMatch(i -> i > 0);
     }
 
     @Override
@@ -88,7 +81,10 @@ public class RedstoneConduitNetworkContext implements ConduitNetworkContext<Reds
     }
 
     private RedstoneConduitNetworkContext copy() {
-        return new RedstoneConduitNetworkContext(isActive, new HashMap<>(channelSignals));
+        var copy = new RedstoneConduitNetworkContext();
+        copy.isActive = isActive;
+        System.arraycopy(channelSignals, 0, copy.channelSignals, 0, CHANNEL_COUNT);
+        return copy;
     }
 
     @Override

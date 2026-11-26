@@ -2,9 +2,10 @@ package com.enderio.enderio.content.conduits.network.pathing;
 
 import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
 import com.enderio.enderio.api.conduits.connection.path.ConduitConnectionPath;
-import org.jetbrains.annotations.ApiStatus;
+import com.enderio.enderio.api.conduits.network.node.ConduitNode;
 
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Strategy interface for finding paths between conduit block connections.
@@ -36,4 +37,14 @@ public interface ConduitPathingStrategy {
         ConduitBlockConnection to,
         PathfindingContext context
     );
+
+    /** Prepare queries from the different faces of one node. Strategies may still route each face pair independently. */
+    default SourcePaths pathsFrom(ConduitNode source, Set<ConduitNode> targets, PathfindingContext context) {
+        return (from, to) -> findPath(from, to, context);
+    }
+
+    @FunctionalInterface
+    interface SourcePaths {
+        Optional<ConduitConnectionPath> findPath(ConduitBlockConnection from, ConduitBlockConnection to);
+    }
 }

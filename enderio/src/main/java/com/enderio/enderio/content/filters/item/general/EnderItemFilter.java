@@ -2,7 +2,7 @@ package com.enderio.enderio.content.filters.item.general;
 
 import com.enderio.core.common.serialization.OrderedListCodec;
 import com.enderio.core.common.util.EqualityUtil;
-import com.enderio.enderio.api.filter.ItemFilter;
+import com.enderio.enderio.content.filters.item.NonMutatingItemFilter;
 import com.enderio.enderio.content.filters.item.ItemFilterUtils;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.Objects;
 
 public record EnderItemFilter(NonNullList<ItemStack> matches, boolean isDenyList, boolean shouldCompareComponents,
-        DamageFilterMode damageFilterMode) implements ItemFilter, TooltipComponent {
+        DamageFilterMode damageFilterMode) implements NonMutatingItemFilter, TooltipComponent {
 
     public static final EnderItemFilter EMPTY = new EnderItemFilter(0);
 

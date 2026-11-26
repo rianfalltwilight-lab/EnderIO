@@ -28,8 +28,11 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.fml.LogicalSide;
+import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.ICapabilityProvider;
 import net.neoforged.neoforge.energy.IEnergyStorage;
+
+import java.util.function.Supplier;
 
 public abstract class PoweredMachineBlockEntity extends MachineBlockEntity implements MachineInstallable {
 
@@ -43,6 +46,7 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
     private final EnergyIOMode energyIOMode;
     private final CapacitorScalable scalableEnergyCapacity;
     private final CapacitorScalable scalableMaxEnergyUse;
+    private final Supplier<CapacitorData> installedCapacitor = this::getCapacitorData;
 
     private final PoweredMachineEnergyStorage energyStorage;
 
@@ -112,12 +116,11 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
     }
 
     public final int getMaxEnergyStored() {
-        // TODO: Scalable might need redesigned to just scale directly...
-        return scalableEnergyCapacity.scaleI(this::getCapacitorData).get();
+        return scalableEnergyCapacity.scaleInt(installedCapacitor);
     }
 
     public final int getMaxEnergyUse() {
-        return scalableMaxEnergyUse.scaleI(this::getCapacitorData).get();
+        return scalableMaxEnergyUse.scaleInt(installedCapacitor);
     }
 
     public final EnergyIOMode energyIOMode() {
@@ -140,7 +143,9 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
         super.distributeResources();
 
         if (energyIOMode.canOutput()) {
-            TransferUtil.distributeEnergyEvenly(level, worldPosition, dir -> energyIOMode.canPush(getIOMode(dir)));
+            TransferUtil.distributeEnergyEvenly(energyStorage, dir -> energyIOMode.canPush(getIOMode(dir)),
+                dir -> getSelfCapability(Capabilities.EnergyStorage.BLOCK, dir),
+                dir -> getNeighbouringCapability(Capabilities.EnergyStorage.BLOCK, dir));
         }
     }
 

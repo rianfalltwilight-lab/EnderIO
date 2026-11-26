@@ -22,16 +22,15 @@ public class RedstoneTLatchFilter implements RedstoneOutputFilter {
 
     @Override
     public int getOutputSignal(RedstoneOutputFilterContext context, DyeColor control) {
-        boolean output = isActive();
-        if (context.isActive(control) && isDeactivated()) {
+        var previous = stack.get(EIODataComponents.REDSTONE_TLATCH_FILTER);
+        boolean powered = context.isActive(control);
+        boolean output = previous.active();
+        if (powered && previous.deactivated()) {
             output = !output;
             setState(output, false);
-        }
-
-        if (!context.isActive(control) && !isDeactivated()) {
+        } else if (!powered && !previous.deactivated()) {
             setState(output, true);
         }
-
         return output ? 15 : 0;
     }
 

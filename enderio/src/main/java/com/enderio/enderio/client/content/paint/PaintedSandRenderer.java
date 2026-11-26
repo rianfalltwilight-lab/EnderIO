@@ -14,6 +14,7 @@ import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.SingleThreadedRandomSource;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -22,6 +23,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
 public class PaintedSandRenderer extends EntityRenderer<FallingBlockEntity> {
+    private final RandomSource random = new SingleThreadedRandomSource(0);
+
     public PaintedSandRenderer(EntityRendererProvider.Context ctx) {
         super(ctx);
     }
@@ -42,11 +45,13 @@ public class PaintedSandRenderer extends EntityRenderer<FallingBlockEntity> {
                 BlockRenderDispatcher blockrenderdispatcher = Minecraft.getInstance().getBlockRenderer();
                 BakedModel model = blockrenderdispatcher.getBlockModel(renderBlockState);
 
-                for (RenderType type : model.getRenderTypes(renderBlockState, RandomSource.create(renderBlockState.getSeed(entity.blockPosition())), ModelData.EMPTY)) {
+                random.setSeed(renderBlockState.getSeed(entity.blockPosition()));
+                long seed = renderBlockState.getSeed(entity.getStartPos());
+                for (RenderType type : model.getRenderTypes(renderBlockState, random, ModelData.EMPTY)) {
                     blockrenderdispatcher
                         .getModelRenderer()
-                        .tesselateBlock(level, blockrenderdispatcher.getBlockModel(renderBlockState), renderBlockState, blockpos, matrixStack, buffer.getBuffer(type),
-                            false, RandomSource.create(), renderBlockState.getSeed(entity.getStartPos()), OverlayTexture.NO_OVERLAY, ModelData.EMPTY, type);
+                        .tesselateBlock(level, model, renderBlockState, blockpos, matrixStack, buffer.getBuffer(type),
+                            false, random, seed, OverlayTexture.NO_OVERLAY, ModelData.EMPTY, type);
                 }
 
                 matrixStack.popPose();

@@ -5,6 +5,7 @@ import com.enderio.core.common.energy.ItemStackEnergy;
 import com.enderio.core.common.util.TooltipUtil;
 import com.enderio.enderio.EnderIO;
 import com.enderio.enderio.foundation.block.EIOEntityBlock;
+import com.enderio.enderio.init.EIODataComponents;
 import com.enderio.enderio.foundation.lang.EIOCommonLang;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
@@ -17,6 +18,7 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
@@ -26,8 +28,10 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
+import net.neoforged.neoforge.event.level.BlockDropsEvent;
 import org.apache.commons.lang3.NotImplementedException;
 import org.jetbrains.annotations.Nullable;
 
@@ -116,9 +120,41 @@ public class CapacitorBankBlock extends EIOEntityBlock<CapacitorBankBlockEntity>
 
     @Override
     protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
-        if (level.getBlockEntity(pos) instanceof CapacitorBankBlockEntity capBank) {
+        if (!state.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof CapacitorBankBlockEntity capBank) {
             capBank.removeNode();
         }
         super.onRemove(state, level, pos, newState, movedByPiston);
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void chargeDroppedBank(BlockDropsEvent event) {
+        if (!(event.getBlockEntity() instanceof CapacitorBankBlockEntity bank)) {
+            return;
+        }
+        int preview = bank.previewDropEnergy();
+        if (preview == 0) {
+            return;
+        }
+        ItemEntity first = null;
+        for (var drop : event.getDrops()) {
+            if (drop.getItem().is(event.getState().getBlock().asItem()) && drop.getItem().getOrDefault(EIODataComponents.ENERGY, 0) == preview) {
+                drop.getItem().remove(EIODataComponents.ENERGY);
+                if (first == null) {
+                    first = drop;
+                }
+            }
+        }
+        if (first != null) {
+            int amount = bank.claimDroppedEnergy();
+            if (amount > 0) {
+                if (first.getItem().getCount() > 1) {
+                    var charged = first.copy();
+                    charged.setItem(first.getItem().split(1));
+                    event.getDrops().add(charged);
+                    first = charged;
+                }
+                first.getItem().set(EIODataComponents.ENERGY, amount);
+            }
+        }
     }
 }
