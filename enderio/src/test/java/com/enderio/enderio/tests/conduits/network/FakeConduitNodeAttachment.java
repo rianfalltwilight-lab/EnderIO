@@ -11,6 +11,8 @@ import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.capabilities.BlockCapability;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.IItemHandlerModifiable;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import org.jetbrains.annotations.Nullable;
@@ -28,8 +30,11 @@ public class FakeConduitNodeAttachment implements IConduitNodeAttachment {
 
     private final Map<Direction, ConnectionStatus> connectionStatuses = new HashMap<>();
     private final Map<Direction, ConnectionConfig> connectionConfigs = new HashMap<>();
+    private final Map<Direction, IItemHandler> neighborItems = new HashMap<>();
+    @Nullable
+    private DyeColor poweredChannel;
 
-    private FakeConduitNodeAttachment(@Nullable Level level, Holder<Conduit<?, ?>> conduit) {
+    FakeConduitNodeAttachment(@Nullable Level level, Holder<Conduit<?, ?>> conduit) {
         this.level = level;
         this.conduit = conduit;
     }
@@ -51,13 +56,25 @@ public class FakeConduitNodeAttachment implements IConduitNodeAttachment {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public @Nullable <T, C> T getCapability(Holder<Conduit<?, ?>> conduit, BlockCapability<T, C> capability, Direction neighborSide, @Nullable C context) {
+        if (capability == Capabilities.ItemHandler.BLOCK && context == neighborSide.getOpposite()) {
+            return (T) neighborItems.get(neighborSide);
+        }
         return null;
+    }
+
+    void setNeighborItems(Direction side, IItemHandler handler) {
+        neighborItems.put(side, handler);
+    }
+
+    void setPoweredChannel(@Nullable DyeColor channel) {
+        poweredChannel = channel;
     }
 
     @Override
     public boolean hasRedstoneSignal(@Nullable DyeColor signalColor) {
-        return false;
+        return signalColor != null && signalColor == poweredChannel;
     }
 
     @Override

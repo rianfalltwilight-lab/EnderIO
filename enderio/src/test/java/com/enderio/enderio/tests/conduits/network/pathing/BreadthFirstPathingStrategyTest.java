@@ -15,6 +15,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.util.Optional;
+
 @ExtendWith(EphemeralTestServerProvider.class)
 public class BreadthFirstPathingStrategyTest {
     
@@ -315,5 +317,34 @@ public class BreadthFirstPathingStrategyTest {
         Assertions.assertTrue(pathCtoA.isPresent(), "Reverse path should exist");
         Assertions.assertEquals(pathAtoC.get().length(), pathCtoA.get().length(),
             "Forward and reverse paths should have same length");
+    }
+
+    @Test
+    void orderedPropertyUsesTheFirstShortestBranch() {
+        var property = new ConnectionPathProperty<String>(values -> Optional.of(String.join("/", values)), "");
+        var context = new FakePathfindingContext();
+        var a = context.createNode("a", testConduit);
+        var b = context.createNode("b", testConduit);
+        var c = context.createNode("c", testConduit);
+        var d = context.createNode("d", testConduit);
+        a.setPathProperty(property, "a");
+        b.setPathProperty(property, "b");
+        c.setPathProperty(property, "c");
+        d.setPathProperty(property, "d");
+        context.addEdge(a, b);
+        context.addEdge(a, c);
+        context.addEdge(b, d);
+        context.addEdge(c, d);
+        var from = new ConduitBlockConnection(a, Direction.NORTH);
+        var to = new ConduitBlockConnection(d, Direction.SOUTH);
+        var firstBranch = context.neighbors(a).iterator().next() == b ? "b" : "c";
+        var returnBranch = context.neighbors(d).iterator().next() == b ? "b" : "c";
+
+        var forward = pathfinder.findPath(from, to, context).orElseThrow();
+        var back = pathfinder.findPath(to, from, context).orElseThrow();
+
+        Assertions.assertEquals("a/" + firstBranch + "/d", forward.property(property));
+        Assertions.assertEquals(forward.property(property), forward.reverse().property(property));
+        Assertions.assertEquals("d/" + returnBranch + "/a", back.property(property));
     }
 }

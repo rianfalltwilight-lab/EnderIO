@@ -78,4 +78,17 @@ public class ModIdItemFilterTests {
         Assertions.assertEquals(filter1, filter2);
         Assertions.assertEquals(filter1.hashCode(), filter2.hashCode());
     }
+
+    @Test
+    void editingTheExamplesChangesTheAllowedNamespacesImmediately() {
+        var filter = new ModIdItemFilter(NonNullList.of(ItemStack.EMPTY, new ItemStack(Items.SAND)), false);
+        var vanilla = new ItemStack(Items.GRASS_BLOCK);
+        var enderio = new ItemStack(EIOItems.GRAINS_OF_INFINITY.get());
+        Assertions.assertFalse(filter.test(null, vanilla).isEmpty());
+        filter.examples().getFirst().setCount(0);
+        Assertions.assertTrue(filter.test(null, vanilla).isEmpty());
+        filter.examples().set(0, new ItemStack(EIOItems.BASIC_CAPACITOR.get()));
+        Assertions.assertFalse(filter.test(null, enderio).isEmpty());
+        Assertions.assertTrue(filter.test(null, vanilla).isEmpty());
+    }
 }
