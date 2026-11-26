@@ -4,12 +4,13 @@ import com.enderio.enderio.client.content.conduits.model.facades.ClientFacadeVis
 import com.enderio.enderio.compat.ModCompatHelper;
 import com.enderio.enderio.content.conduits.bundle.ConduitBundleBlockEntity;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongSet;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.resources.model.SimpleBakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.util.RandomSource;
@@ -21,8 +22,6 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.AddSectionGeometryEvent;
 import net.neoforged.neoforge.client.model.pipeline.VertexConsumerWrapper;
 
-import java.util.Map;
-
 @EventBusSubscriber(value = Dist.CLIENT)
 public class ConduitFacadeRendering {
 
@@ -31,12 +30,7 @@ public class ConduitFacadeRendering {
 
     @SubscribeEvent
     static void renderFacade(AddSectionGeometryEvent event) {
-        var level = Minecraft.getInstance().level;
-        if (level == null) {
-            return;
-        }
-
-        var dimension = level.dimension();
+        var dimension = event.getLevel().dimension();
 
         var facadesForDimension = ConduitBundleBlockEntity.CHUNK_FACADES.get(dimension);
         if (facadesForDimension == null) {
@@ -53,11 +47,11 @@ public class ConduitFacadeRendering {
             return;
         }
 
-        Map<BlockPos, BlockState> facades = new Object2ObjectOpenHashMap<>();
+        var facades = new Long2ObjectOpenHashMap<BlockState>(blockList.size());
         for (long entry : blockList) {
             BlockState state = facadesForDim.get(entry);
             if (state != null) {
-                facades.put(BlockPos.of(entry), state);
+                facades.put(entry, state);
             }
         }
 
@@ -68,10 +62,10 @@ public class ConduitFacadeRendering {
     }
 
     private static class FacadeRenderer implements AddSectionGeometryEvent.AdditionalSectionRenderer {
-        private final Map<BlockPos, BlockState> facades;
+        private final Long2ObjectOpenHashMap<BlockState> facades;
         private final boolean opaque;
 
-        public FacadeRenderer(Map<BlockPos, BlockState> facades, boolean opaque) {
+        public FacadeRenderer(Long2ObjectOpenHashMap<BlockState> facades, boolean opaque) {
             this.facades = facades;
             this.opaque = opaque;
         }
@@ -89,36 +83,31 @@ public class ConduitFacadeRendering {
             VertexConsumerWrapper wrapper = opaque ? null : new AlphaWrapper(context);
 
             RandomSource random = RANDOM.get();
-
-            for (Map.Entry<BlockPos, BlockState> entry : facades.entrySet()) {
-                context.getPoseStack().pushPose();
-                context.getPoseStack()
-                        .translate(entry.getKey().getX() & 15, entry.getKey().getY() & 15, entry.getKey().getZ() & 15);
-
+            var minecraft = Minecraft.getInstance();
+            var models = minecraft.getModelManager().getBlockModelShaper();
+            var renderer = minecraft.getBlockRenderer().getModelRenderer();
+            var pose = context.getPoseStack();
+            var region = context.getRegion();
+            var cursor = new BlockPos.MutableBlockPos();
+            for (var iterator = facades.long2ObjectEntrySet().fastIterator(); iterator.hasNext();) {
+                var entry = iterator.next();
                 var state = entry.getValue();
-                var pos = entry.getKey();
+                var model = models.getBlockModel(state);
+                cursor.set(entry.getLongKey());
+                // Custom models can retain the position in their ModelData.
+                BlockPos pos = model.getClass() == SimpleBakedModel.class ? cursor : cursor.immutable();
+                pose.pushPose();
+                pose.translate(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
 
                 random.setSeed(42L);
-
-                var model = Minecraft.getInstance()
-                        .getModelManager()
-                        .getBlockModelShaper()
-                        .getBlockModel(entry.getValue());
-
-                var modelData = context.getRegion().getModelData(pos);
-
-                modelData = model.getModelData(context.getRegion(), pos, state, modelData);
-
-                for (var renderType : model.getRenderTypes(entry.getValue(), random, modelData)) {
+                var modelData = model.getModelData(region, pos, state, region.getModelData(pos));
+                for (var renderType : model.getRenderTypes(state, random, modelData)) {
                     VertexConsumer consumer = wrapper == null ? context.getOrCreateChunkBuffer(renderType) : wrapper;
-                    Minecraft.getInstance()
-                            .getBlockRenderer()
-                            .getModelRenderer()
-                            .tesselateBlock(context.getRegion(), model, state, pos, context.getPoseStack(), consumer,
-                                    true, random, 42L, OverlayTexture.NO_OVERLAY, modelData, renderType);
+                    renderer.tesselateBlock(region, model, state, pos, pose, consumer, true, random, 42L,
+                            OverlayTexture.NO_OVERLAY, modelData, renderType);
                 }
 
-                context.getPoseStack().popPose();
+                pose.popPose();
             }
         }
 

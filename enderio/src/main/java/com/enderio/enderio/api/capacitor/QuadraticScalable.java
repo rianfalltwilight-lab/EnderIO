@@ -15,7 +15,12 @@ public record QuadraticScalable(CapacitorModifier modifier, Supplier<Integer> ba
 
     @Override
     public Supplier<Integer> scaleI(Supplier<CapacitorData> data) {
-        return () -> Math.round(scale(base.get(), data.get().getModifier(modifier)));
+        return () -> scaleInt(data);
+    }
+
+    @Override
+    public int scaleInt(Supplier<CapacitorData> data) {
+        return Math.round(scale(base.get(), data.get().getModifier(modifier)));
     }
 
     private static float scale(int base, float level) {

@@ -39,12 +39,15 @@ public class ConduitShape {
     private static final Map<Direction, VoxelShape> CONNECTIONS_BY_DIRECTION = rotatedShapes(CONNECTION);
     private static final VoxelShape CORE = Block.box(6.5f, 6.5f, 6.5f, 9.5f, 9.5f, 9.5f);
     private VoxelShape totalShape = CORE;
+    private record Hit(BlockPos pos, Vec3 location, VoxelShape shape) {}
+    private @Nullable Hit lastHit;
 
     public ConduitShape() {
 
     }
 
     public void updateConduit(ConduitBundle bundle) {
+        lastHit = null;
         this.conduitShapes.clear();
         this.conduitConnections.clear();
         this.individualShapes.clear();
@@ -57,6 +60,16 @@ public class ConduitShape {
     // TODO: Looks weird when the connecting boxes arrive, but this at least now
     // matches 1.12 behaviour.
     public VoxelShape getShapeFromHit(BlockPos pos, HitResult result) {
+        var location = result.getLocation();
+        if (lastHit != null && lastHit.pos().equals(pos) && lastHit.location().equals(location)) {
+            return lastHit.shape();
+        }
+        var shape = findShapeFromHit(pos, result);
+        lastHit = new Hit(pos.immutable(), location, shape);
+        return shape;
+    }
+
+    private VoxelShape findShapeFromHit(BlockPos pos, HitResult result) {
         var aimedConduit = getConduit(pos, result);
 
         if (aimedConduit == null || !individualShapes.containsKey(aimedConduit)) {

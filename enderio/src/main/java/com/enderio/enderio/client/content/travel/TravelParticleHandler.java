@@ -11,13 +11,22 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
-import org.apache.commons.lang3.tuple.Triple;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Calendar;
+import java.time.Instant;
+import java.time.Month;
+import java.time.ZoneId;
 
 @EventBusSubscriber(value = Dist.CLIENT)
 public class TravelParticleHandler {
+    private static final float[] PURPLE = {117 / 255f, 7 / 255f, 135 / 255f};
+    private static final float[] WHITE = {1, 1, 1};
+    private static final float[][] JUNE_COLORS = {
+        {228 / 255f, 3 / 255f, 3 / 255f}, {1, 140 / 255f, 0}, {1, 237 / 255f, 0},
+        {0, 128 / 255f, 38 / 255f}, {0, 77 / 255f, 1}, PURPLE, WHITE, WHITE, WHITE, WHITE
+    };
+    private static long dayStart, nextDay;
+    private static boolean june;
     private static int tick = 0;
 
     @SubscribeEvent
@@ -41,23 +50,23 @@ public class TravelParticleHandler {
             particle.setLifetime(30);
             var color = getTravelParticleColor();
             particle.gravity = 0;
-            particle.setColor(color.getLeft(), color.getMiddle(), color.getRight());
+            particle.setColor(color[0], color[1], color[2]);
         }
     }
 
-    private static Triple<Float, Float, Float> getTravelParticleColor() {
-        if (Calendar.getInstance().get(Calendar.MONTH) == Calendar.JUNE) {
-            int halfTick = tick/3%10;
-            return switch (halfTick) {
-                case 0: yield Triple.of(228/255f, 3/255f, 3/255f);
-                case 1: yield Triple.of(255/255f, 140/255f, 0/255f);
-                case 2: yield Triple.of(255/255f, 237/255f, 0/255f);
-                case 3: yield Triple.of(0/255f, 128/255f, 38/255f);
-                case 4: yield Triple.of(0/255f, 77/255f, 255/255f);
-                case 5: yield Triple.of(117/255f, 7/255f, 135/255f);
-                default: yield Triple.of(255/255f, 255/255f, 255/255f);
-            };
+    private static float[] getTravelParticleColor() {
+        long now = System.currentTimeMillis();
+        if (now < dayStart || now >= nextDay) {
+            ZoneId zone = ZoneId.systemDefault();
+            var date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
+            dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli();
+            nextDay = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
+            june = date.getMonth() == Month.JUNE;
         }
-        return Triple.of(117/255f, 7/255f, 135/255f);
+        if (!june) {
+            return PURPLE;
+        }
+        int index = tick / 3 % JUNE_COLORS.length;
+        return index < 0 ? WHITE : JUNE_COLORS[index];
     }
 }

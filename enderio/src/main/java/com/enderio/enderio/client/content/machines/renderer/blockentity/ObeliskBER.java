@@ -21,6 +21,7 @@ import java.util.function.Supplier;
 public class ObeliskBER implements BlockEntityRenderer<BlockEntity> {
 
     private final Supplier<Item> supplier;
+    private ItemStack renderStack = ItemStack.EMPTY;
 
     public ObeliskBER(Supplier<Item> itemSupplier) {
         this.supplier = itemSupplier;
@@ -42,7 +43,11 @@ public class ObeliskBER implements BlockEntityRenderer<BlockEntity> {
         float f1 = (float) (Mth.atan2(position.z - blockEntity.getBlockPos().getZ() - 0.5D,
                 position.x - blockEntity.getBlockPos().getX() - 0.5D) * 180.0f / Math.PI + 90);
         poseStack.mulPose(Axis.YP.rotationDegrees(-f1 + 180));
-        ItemStack stack = new ItemStack(supplier.get());
+        Item item = supplier.get();
+        if (renderStack.getItem() != item || renderStack.getCount() != 1 || !renderStack.isComponentsPatchEmpty()) {
+            renderStack = new ItemStack(item);
+        }
+        ItemStack stack = renderStack;
         BakedModel bakedmodel = minecraft.getItemRenderer().getModel(stack, blockEntity.getLevel(), null, 0);
         if (stack.getItem() instanceof BlockItem) { //Blocks are in iso, let's correct that
             poseStack.mulPose(Axis.YP.rotationDegrees(45));

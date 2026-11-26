@@ -32,6 +32,8 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.ICapabilityProvider;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 
+import java.util.function.Supplier;
+
 public abstract class PoweredMachineBlockEntity extends MachineBlockEntity implements MachineInstallable {
 
     public static final ICapabilityProvider<PoweredMachineBlockEntity, Direction, IEnergyStorage> ENERGY_STORAGE_PROVIDER = (
@@ -44,6 +46,7 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
     private final EnergyIOMode energyIOMode;
     private final CapacitorScalable scalableEnergyCapacity;
     private final CapacitorScalable scalableMaxEnergyUse;
+    private final Supplier<CapacitorData> installedCapacitor = this::getCapacitorData;
 
     private final PoweredMachineEnergyStorage energyStorage;
 
@@ -113,12 +116,11 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
     }
 
     public final int getMaxEnergyStored() {
-        // TODO: Scalable might need redesigned to just scale directly...
-        return scalableEnergyCapacity.scaleI(this::getCapacitorData).get();
+        return scalableEnergyCapacity.scaleInt(installedCapacitor);
     }
 
     public final int getMaxEnergyUse() {
-        return scalableMaxEnergyUse.scaleI(this::getCapacitorData).get();
+        return scalableMaxEnergyUse.scaleInt(installedCapacitor);
     }
 
     public final EnergyIOMode energyIOMode() {

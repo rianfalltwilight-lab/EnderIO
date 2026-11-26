@@ -8,6 +8,7 @@ import com.enderio.enderio.api.conduits.connection.config.ConnectionConfig;
 import com.enderio.enderio.api.conduits.network.node.NodeData;
 import com.enderio.enderio.content.conduits.ConduitSorter;
 import com.enderio.enderio.content.conduits.bundle.ConduitBundleBlockEntity;
+import com.enderio.enderio.content.conduits.bundle.ConduitShape;
 import com.enderio.enderio.content.conduits.network.ConduitNetworkSavedData;
 import com.enderio.enderio.content.conduits.type.item.ItemConduitConnectionConfig;
 import com.enderio.enderio.content.conduits.type.item.ItemConduitNodeData;
@@ -182,6 +183,29 @@ public class ConduitBundleLoadTests {
             Assertions.assertEquals(List.of(item, fluid), bundle.getConduits());
             Assertions.assertTrue(bundle.getConnectedConduits(Direction.SOUTH).isEmpty());
         }
+    }
+
+    @Test
+    void highlightReusesAHitUntilTheConduitShapeChanges(MinecraftServer server) {
+        var item = itemConduit(server);
+        var tag = savedBundle(server, item);
+        var bundle = new ConduitBundleBlockEntity(BlockPos.ZERO, EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState());
+        bundle.loadWithComponents(tag, server.registryAccess());
+        var shape = spy(new ConduitShape());
+        shape.updateConduit(bundle);
+        var hit = new BlockHitResult(new Vec3(0.5, 0.5, 0.01), Direction.NORTH, BlockPos.ZERO, false);
+
+        var first = shape.getShapeFromHit(BlockPos.ZERO, hit);
+        Assertions.assertFalse(first.isEmpty());
+        Assertions.assertSame(first, shape.getShapeFromHit(BlockPos.ZERO, hit));
+        verify(shape, times(1)).getConduit(BlockPos.ZERO, hit);
+        Assertions.assertTrue(shape.getShapeFromHit(BlockPos.ZERO.above(), hit).isEmpty());
+        Assertions.assertSame(first, shape.getShapeFromHit(BlockPos.ZERO, hit));
+
+        tag.getList("Connections", Tag.TAG_LIST).getList(0).getCompound(0).putString("Side", Direction.SOUTH.getName());
+        bundle.loadWithComponents(tag, server.registryAccess());
+        shape.updateConduit(bundle);
+        Assertions.assertTrue(shape.getShapeFromHit(BlockPos.ZERO, hit).isEmpty());
     }
 
     @Test

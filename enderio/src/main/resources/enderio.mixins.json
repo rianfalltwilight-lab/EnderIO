@@ -10,7 +10,8 @@
     "client" : [
         "GliderRotationMixin",
         "BlockRenderDispatcherMixin",
-        "ClientLevelMixin"
+        "ClientLevelMixin",
+        "ItemColorsAccessor"
     ],
     "minVersion" : "0.8"
 }

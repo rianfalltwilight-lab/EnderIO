@@ -10,4 +10,9 @@ import java.util.function.Supplier;
 public interface CapacitorScalable {
     Supplier<Float> scaleF(Supplier<CapacitorData> data);
     Supplier<Integer> scaleI(Supplier<CapacitorData> data);
+
+    /** Evaluate a machine's current value. Existing addon scalables retain their supplier semantics. */
+    default int scaleInt(Supplier<CapacitorData> data) {
+        return scaleI(data).get();
+    }
 }

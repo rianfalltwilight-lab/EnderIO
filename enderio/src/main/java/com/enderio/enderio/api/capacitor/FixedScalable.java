@@ -18,4 +18,9 @@ public record FixedScalable(Supplier<Integer> value) implements CapacitorScalabl
     public Supplier<Integer> scaleI(Supplier<CapacitorData> data) {
         return value;
     }
+
+    @Override
+    public int scaleInt(Supplier<CapacitorData> data) {
+        return value.get();
+    }
 }

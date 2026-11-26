@@ -25,7 +25,6 @@ import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
 import org.jetbrains.annotations.Nullable;
 
 import java.text.NumberFormat;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -34,6 +33,8 @@ import java.util.Optional;
 
 @EventBusSubscriber(value = Dist.CLIENT)
 public class TooltipHandler {
+    private static final ThreadLocal<NumberFormat> CAPACITOR_FORMAT =
+            ThreadLocal.withInitial(() -> NumberFormat.getInstance(Locale.ENGLISH));
 
     @SubscribeEvent
     public static void addAdvancedTooltips(ItemTooltipEvent evt) {
@@ -62,7 +63,7 @@ public class TooltipHandler {
         }
 
         if (capacitorData != null) {
-            NumberFormat fmt = NumberFormat.getInstance(Locale.ENGLISH);
+            NumberFormat fmt = CAPACITOR_FORMAT.get();
             components
                     .add(TooltipUtil.styledWithArgs(CapacitorLang.CAPACITOR_TOOLTIP_BASE, fmt.format(capacitorData.base())));
 
@@ -116,14 +117,14 @@ public class TooltipHandler {
         return Optional.empty();
     }
 
-    private static void addAdvancedTooltips(AdvancedTooltipProvider tooltipProvider, ItemStack itemstack,
+    static void addAdvancedTooltips(AdvancedTooltipProvider tooltipProvider, ItemStack itemstack,
             @Nullable Player player, List<Component> components, boolean showAdvanced) {
         tooltipProvider.addCommonTooltips(itemstack, player, components);
         if (showAdvanced) {
             tooltipProvider.addDetailedTooltips(itemstack, player, components);
         } else {
             tooltipProvider.addBasicTooltips(itemstack, player, components);
-            if (hasDetailedTooltip(tooltipProvider, itemstack, player)) {
+            if (tooltipProvider.hasDetailedTooltip(itemstack, player)) {
                 addShowDetailsTooltip(components);
             }
         }
@@ -137,10 +138,4 @@ public class TooltipHandler {
         }
     }
 
-    private static boolean hasDetailedTooltip(AdvancedTooltipProvider tooltipProvider, ItemStack stack,
-            @Nullable Player player) {
-        List<Component> tooltips = new ArrayList<>();
-        tooltipProvider.addDetailedTooltips(stack, player, tooltips);
-        return !tooltips.isEmpty();
-    }
 }
