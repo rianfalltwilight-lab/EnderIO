@@ -46,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.ObjLongConsumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -530,10 +531,12 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             return;
         }
 
-        // Remove connections from any maps
-        for (var connection : endpointConnections.get(node)) {
-            // Remove this connection's maps
-            var peers = accessiblePathsByConnection.remove(connection);
+        var removed = endpointConnections.removeAll(node);
+        if (removed.isEmpty()) {
+            return;
+        }
+        for (var connection : removed) {
+            accessiblePathsByConnection.remove(connection);
 
             insertConnections.remove(connection);
             extractConnections.remove(connection);
@@ -544,26 +547,14 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
             extractConnectionsByInsert.remove(connection);
             insertConnectionsByExtract.remove(connection);
-
-            for (var path : peers) {
-                removeDestination(accessiblePathsByConnection, path.end(), connection);
-                removeDestination(extractConnectionsByInsert, path.end(), connection);
-                removeDestination(insertConnectionsByExtract, path.end(), connection);
-            }
-
-            haveConnectionsChanged = true;
         }
 
-        // And finally remove all the connections from the main list.
-        endpointConnections.removeAll(node);
-    }
-
-    private static void removeDestination(Map<ConduitBlockConnection, List<ConduitConnectionPath>> index,
-                                          ConduitBlockConnection peer, ConduitBlockConnection removed) {
-        var paths = index.get(peer);
-        if (paths != null) {
-            paths.removeIf(path -> path.end().equals(removed));
-        }
+        // The public path lists are mutable, so one endpoint's list cannot identify all its peers.
+        Predicate<ConduitConnectionPath> touchesRemoved = path -> removed.contains(path.end()) || removed.contains(path.start());
+        accessiblePathsByConnection.values().forEach(paths -> paths.removeIf(touchesRemoved));
+        extractConnectionsByInsert.values().forEach(paths -> paths.removeIf(touchesRemoved));
+        insertConnectionsByExtract.values().forEach(paths -> paths.removeIf(touchesRemoved));
+        haveConnectionsChanged = true;
     }
 
     private void updateChannelList() {

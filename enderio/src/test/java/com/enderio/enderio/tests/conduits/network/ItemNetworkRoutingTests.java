@@ -201,6 +201,28 @@ class ItemNetworkRoutingTests {
     }
 
     @Test
+    void detachingAnEndpointCleansItsPeersAfterAnAddonEditsItsAccessibleList() {
+        var both = EXTRACT.withIsInsert(true);
+        var first = endpoint(0, both);
+        var second = endpoint(1, both);
+        var network = first.node.getNetwork();
+        network.connect(first.node, second.node);
+        network.ensureCachesReady();
+        var kept = new ConduitBlockConnection(first.node, FACE);
+        var removed = new ConduitBlockConnection(second.node, FACE);
+        assertTrue(network.insertConnectionsFrom(kept).stream().anyMatch(path -> path.end().equals(removed)));
+        assertTrue(network.extractConnectionsFrom(kept).stream().anyMatch(path -> path.end().equals(removed)));
+
+        network.blockConnectionsAccessibleFrom(removed).clear();
+        second.node.detach();
+        network.ensureCachesReady();
+
+        assertTrue(network.blockConnectionsAccessibleFrom(kept).isEmpty());
+        assertTrue(network.insertConnectionsFrom(kept).stream().noneMatch(path -> path.end().equals(removed)));
+        assertTrue(network.extractConnectionsFrom(kept).stream().noneMatch(path -> path.end().equals(removed)));
+    }
+
+    @Test
     void selfFeedingEndpointHasOnePathAndIsExcludedFromItsAccessiblePeers() {
         var endpoint = endpoint(0, EXTRACT.withIsInsert(true).withIsSelfFeed(true));
         var connection = new ConduitBlockConnection(endpoint.node, FACE);

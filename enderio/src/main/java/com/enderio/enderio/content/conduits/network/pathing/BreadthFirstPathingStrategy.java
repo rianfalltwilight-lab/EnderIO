@@ -8,6 +8,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -63,9 +64,24 @@ public class BreadthFirstPathingStrategy implements ConduitPathingStrategy {
     }
 
     private static Step visit(ConduitNode node, @Nullable Step parent, PathfindingContext context) {
-        var properties = context.collectNodeProperties(node);
+        var properties = snapshotProperties(context.collectNodeProperties(node), parent == null);
         Map<ConnectionPathProperty<?>, Object> prefix = parent == null ? Map.of() : parent.reduced();
         return new Step(node, parent, parent == null ? 1 : parent.length() + 1, properties, extendPrefix(prefix, properties));
+    }
+
+    private static Map<ConnectionPathProperty<?>, Object> snapshotProperties(Map<ConnectionPathProperty<?>, Object> properties, boolean source) {
+        if (properties.isEmpty()) {
+            return Map.of();
+        }
+        if (properties.size() == 1) {
+            var entry = properties.entrySet().iterator().next();
+            if (!source && entry.getValue() == null) {
+                return Collections.singletonMap(entry.getKey(), null);
+            }
+            return Map.of(entry.getKey(), entry.getValue());
+        }
+        // The original BFS rejected null at the source but passed null at later nodes to addon aggregators.
+        return source ? Map.copyOf(properties) : new HashMap<>(properties);
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -77,14 +93,14 @@ public class BreadthFirstPathingStrategy implements ConduitPathingStrategy {
         }
         if (properties.size() == 1) {
             var entry = properties.entrySet().iterator().next();
-            if (entry.getKey() instanceof ConnectionPathProperty.Reducible property) {
+            if (entry.getKey() instanceof ConnectionPathProperty.Reducible property && entry.getValue() != null) {
                 Object previous = prefix.get(property);
                 if (previous != null) {
                     Object next = property.append(previous, entry.getValue());
                     return next == previous ? prefix : Map.of(property, next);
                 }
                 if (prefix.isEmpty()) {
-                    return Map.of(property, entry.getValue());
+                    return properties;
                 }
             }
         }
