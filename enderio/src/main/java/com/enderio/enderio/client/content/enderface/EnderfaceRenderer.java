@@ -7,17 +7,26 @@ import com.enderio.enderio.content.enderface.EnderfaceTravelTarget;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.util.FastColor;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 
 public class EnderfaceRenderer implements TravelRenderer<EnderfaceTravelTarget> {
     public static final RenderType BOLD_LINES = OutlineRenderType.createLines("bold_lines", 3);
     public static final RenderType VERY_BOLD_LINES = OutlineRenderType.createLines("very_bold_lines", 5);
+
+    @Override
+    public boolean isVisible(EnderfaceTravelTarget target, Camera camera, Frustum frustum, boolean active) {
+        // Allow extended block models and the thick screen-space outline at the edge of the view.
+        return frustum.isVisible(new AABB(target.pos()).inflate(2));
+    }
 
     @Override
     public void render(EnderfaceTravelTarget travelData, LevelRenderer levelRenderer, PoseStack poseStack,
@@ -52,6 +61,5 @@ public class EnderfaceRenderer implements TravelRenderer<EnderfaceTravelTarget> 
         LevelRenderer.renderLineBox(poseStack, lines, 0, 0, 0, 1, 1, 1, FastColor.ARGB32.red(color) / 255F,
                 FastColor.ARGB32.green(color) / 255F, FastColor.ARGB32.blue(color) / 255F, 1);
 
-        minecraft.renderBuffers().bufferSource().endBatch();
     }
 }

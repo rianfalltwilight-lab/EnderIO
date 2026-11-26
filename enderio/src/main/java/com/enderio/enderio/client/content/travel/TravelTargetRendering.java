@@ -13,7 +13,6 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -45,11 +44,9 @@ public class TravelTargetRendering {
         return (TravelRenderer<T>) RENDERERS.get(type);
     }
 
-    private static <T extends TravelTarget> void render(T target, LevelRenderer levelRender, PoseStack poseStack,
-            double distanceSquared, boolean isActive, float partialTick) {
-        // noinspection unchecked
-        getRenderer((TravelTargetType<T>) target.type()).render(target, levelRender, poseStack, distanceSquared,
-                isActive, partialTick);
+    @SuppressWarnings("unchecked")
+    private static <T extends TravelTarget> TravelRenderer<T> rendererFor(T target) {
+        return getRenderer((TravelTargetType<T>) target.type());
     }
 
     @SubscribeEvent
@@ -80,30 +77,29 @@ public class TravelTargetRendering {
 
         @Nullable
         TravelTarget activeTarget = TravelHandler.getTeleportAnchorTarget(player).orElse(null);
+        Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
+        Vec3 projectedView = camera.getPosition();
+        float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         for (TravelTarget target : TravelTargetApi.INSTANCE.getAll(level)) {
             double range = itemTeleport ? target.item2BlockRange() : target.block2BlockRange();
             double distanceSquared = target.pos().distToCenterSqr(player.position());
-            if (range * range < distanceSquared || distanceSquared < TravelHandler.MIN_TELEPORTATION_DISTANCE_SQUARED
+            if (range * range < distanceSquared || distanceSquared < TravelHandler.MIN_TELEPORTATION_DISTANCE_SQUARED) {
+                continue;
+            }
+            var renderer = rendererFor(target);
+            boolean active = activeTarget == target;
+            if (renderer == null || !renderer.isVisible(target, camera, event.getFrustum(), active)
                     || TravelHandler.isTeleportPositionClear(level, target.pos()).isEmpty()) {
                 continue;
             }
 
             poseStack.pushPose();
-            Camera mainCamera = Minecraft.getInstance().gameRenderer.getMainCamera();
-            Vec3 projectedView = mainCamera.getPosition();
             poseStack.translate(
                 target.pos().getX() - projectedView.x,
                 target.pos().getY() - projectedView.y,
                 target.pos().getZ() - projectedView.z);
 
-            boolean active = activeTarget == target;
-
-            // needed for smooth rendering
-            // the boolean value controls whether it's still smooth while the game world is
-            // paused (e.g. /tick freeze)
-            float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
-
-            render(target, event.getLevelRenderer(), poseStack, distanceSquared, active, partialTick);
+            renderer.render(target, event.getLevelRenderer(), poseStack, distanceSquared, active, partialTick);
             poseStack.popPose();
         }
 

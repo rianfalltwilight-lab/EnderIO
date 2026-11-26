@@ -1,9 +1,11 @@
 package com.enderio.enderio.client.content.conduits.model;
 
 import com.enderio.enderio.EnderIO;
+import com.enderio.enderio.client.content.conduits.model.bundle.ConduitBundleModel;
 import com.enderio.enderio.client.content.conduits.model.modifier.ConduitModelModifiers;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.client.resources.model.ModelResourceLocation;
+import net.minecraft.client.resources.model.SimpleBakedModel;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -53,8 +55,14 @@ public class ConduitAdditionalModels {
 
     @SubscribeEvent
     public static void bakingModelsFinished(ModelEvent.BakingCompleted event) {
+        boolean staticBundleModels = true;
         for (ModelResourceLocation modelLocation : MODEL_LOCATIONS) {
-            MODELS.put(modelLocation, event.getModels().get(modelLocation));
+            var model = event.getModels().get(modelLocation);
+            MODELS.put(modelLocation, model);
+            if (modelLocation != CONDUIT_FACADE_OVERLAY && (model == null || model.getClass() != SimpleBakedModel.class)) {
+                staticBundleModels = false;
+            }
         }
+        ConduitBundleModel.onModelsBaked(staticBundleModels);
     }
 }

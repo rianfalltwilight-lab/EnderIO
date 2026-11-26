@@ -68,6 +68,23 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     private final CapacitorTier tier;
     private CapacitorBankNode node;
     private int energyForDrop;
+    @Nullable private CapacitorBankDisplay clientDisplay;
+
+    public CapacitorBankDisplay clientDisplay() {
+        if (clientDisplay == null) {
+            clientDisplay = new CapacitorBankDisplay(Objects.requireNonNull(level), worldPosition);
+        }
+        return clientDisplay;
+    }
+
+    @Override
+    public void setRemoved() {
+        if (clientDisplay != null) {
+            clientDisplay.removed();
+            clientDisplay = null;
+        }
+        super.setRemoved();
+    }
     private int legacyEnergy = 0;
     private UUID uuid = UUID.randomUUID();
 
@@ -155,6 +172,9 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     @Override
     public void onLoad() {
         super.onLoad();
+        if (level.isClientSide()) {
+            clientDisplay();
+        }
 
         // Create all energy caches
         if (!level.isClientSide()) {
@@ -371,7 +391,9 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     }
 
     public void setDisplayMode(Direction direction, DisplayMode mode) {
-        displayModes.put(direction, mode);
+        if (displayModes.put(direction, mode) != mode && clientDisplay != null) {
+            clientDisplay.changed();
+        }
     }
 
     public boolean onShiftRightClick(Direction direction, Player player) {
@@ -388,8 +410,8 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
             return false;
         }
 
-        displayModes.put(direction,
-            DisplayMode.values()[(displayModes.get(direction).ordinal() + 1) % DisplayMode.values().length]);
+        setDisplayMode(direction,
+            DisplayMode.values()[(displayModes.getOrDefault(direction, DisplayMode.NONE).ordinal() + 1) % DisplayMode.values().length]);
         setChanged();
         level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
         return true;
@@ -459,12 +481,18 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     }
 
     public void loadDisplayModes(CompoundTag nbt) {
-        displayModes.clear();
-        for (String key : nbt.getAllKeys()) {
-            @Nullable
-            Direction dir = Direction.byName(key);
-            if (dir != null) {
-                displayModes.put(dir, DisplayMode.values()[nbt.getInt(key)]);
+        var decoded = new EnumMap<Direction, DisplayMode>(Direction.class);
+        for (var key : nbt.getAllKeys()) {
+            var direction = Direction.byName(key);
+            if (direction != null) {
+                decoded.put(direction, DisplayMode.values()[nbt.getInt(key)]);
+            }
+        }
+        if (!displayModes.equals(decoded)) {
+            displayModes.clear();
+            displayModes.putAll(decoded);
+            if (clientDisplay != null) {
+                clientDisplay.changed();
             }
         }
     }

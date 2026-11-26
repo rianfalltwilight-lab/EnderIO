@@ -10,6 +10,7 @@ import net.minecraft.client.renderer.block.model.ItemOverrides;
 import net.minecraft.client.renderer.block.model.ItemTransforms;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.resources.model.SimpleBakedModel;
 import net.minecraft.core.Direction;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.ItemStack;
@@ -20,36 +21,52 @@ import net.neoforged.neoforge.client.model.data.ModelData;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class FacadeItemModel implements IDynamicBakedModel {
 
-    private final Map<Block, List<BakedModel>> itemRenderCache = new HashMap<>();
-    private final Block facade;
+    private final Map<Block, List<BakedModel>> itemRenderCache = new ConcurrentHashMap<>();
+    private final @Nullable Block facade;
+    private final ItemStack facadeStack;
     private final BakedModel facadeModel;
+    private final AtomicReferenceArray<FaceQuads> faces = new AtomicReferenceArray<>(7);
+
+    private record FaceQuads(BakedModel paint, BakedModel overlay, List<BakedQuad> quads) {}
 
     public FacadeItemModel(BakedModel facadeModel) {
-        this.facade = null;
-        this.facadeModel = facadeModel;
+        this(facadeModel, null);
     }
 
-    private FacadeItemModel(BakedModel facadeModel, Block facade) {
+    private FacadeItemModel(BakedModel facadeModel, @Nullable Block facade) {
         this.facade = facade;
+        this.facadeStack = facade == null ? ItemStack.EMPTY : facade.asItem().getDefaultInstance();
         this.facadeModel = facadeModel;
     }
 
     @Override
     public List<BakedQuad> getQuads(@Nullable BlockState state, @Nullable Direction side, RandomSource rand,
             ModelData extraData, @Nullable RenderType renderType) {
-        List<BakedQuad> bakedQuads = new ArrayList<>();
-        if (facade != null) {
-            bakedQuads.addAll(getItemModel().getQuads(facade.defaultBlockState(), side, rand, extraData, renderType));
-            bakedQuads.addAll(ConduitAdditionalModels.modelOf(ConduitAdditionalModels.CONDUIT_FACADE_OVERLAY).getQuads(null, side, rand, extraData,
-                    renderType));
-        } else {
-            bakedQuads.addAll(facadeModel.getQuads(null, side, rand, extraData, renderType));
+        if (facade == null) {
+            return facadeModel.getQuads(null, side, rand, extraData, renderType);
+        }
+        BakedModel paint = getItemModel();
+        BakedModel overlay = ConduitAdditionalModels.modelOf(ConduitAdditionalModels.CONDUIT_FACADE_OVERLAY);
+        int face = side == null ? 6 : side.ordinal();
+        boolean cacheable = paint.getClass() == SimpleBakedModel.class && overlay.getClass() == SimpleBakedModel.class;
+        if (cacheable) {
+            FaceQuads cached = faces.get(face);
+            if (cached != null && cached.paint == paint && cached.overlay == overlay) {
+                return cached.quads;
+            }
+        }
+        List<BakedQuad> bakedQuads = new ArrayList<>(paint.getQuads(facade.defaultBlockState(), side, rand, extraData, renderType));
+        bakedQuads.addAll(overlay.getQuads(null, side, rand, extraData, renderType));
+        if (cacheable) {
+            bakedQuads = List.copyOf(bakedQuads);
+            faces.set(face, new FaceQuads(paint, overlay, bakedQuads));
         }
         return bakedQuads;
     }
@@ -100,11 +117,8 @@ public class FacadeItemModel implements IDynamicBakedModel {
             return List.of(RenderType.cutout());
         }
 
-        var paintStack = paintData.paint().asItem().getDefaultInstance();
-        return Minecraft.getInstance()
-                .getItemRenderer()
-                .getModel(paintStack, null, null, 0)
-                .getRenderTypes(paintStack, fabulous);
+        var pass = (FacadeItemModel) passesFor(paintData.paint()).getFirst();
+        return pass.getItemModel().getRenderTypes(pass.facadeStack, fabulous);
     }
 
     @Override
@@ -114,15 +128,18 @@ public class FacadeItemModel implements IDynamicBakedModel {
         }
 
         var paintData = itemStack.get(EIODataComponents.BLOCK_PAINT);
-        return itemRenderCache.computeIfAbsent(paintData.paint(),
-                paintKey -> List.of(new FacadeItemModel(facadeModel, paintData.paint())));
+        return passesFor(paintData.paint());
+    }
+
+    private List<BakedModel> passesFor(Block paint) {
+        return itemRenderCache.computeIfAbsent(paint, key -> List.of(new FacadeItemModel(facadeModel, key)));
     }
 
     /**
      * Get the reference block's item model.
      */
     private BakedModel getItemModel() {
-        return Minecraft.getInstance().getItemRenderer().getModel(facade.asItem().getDefaultInstance(), null, null, 0);
+        return Minecraft.getInstance().getItemRenderer().getModel(facadeStack, null, null, 0);
     }
 
 }

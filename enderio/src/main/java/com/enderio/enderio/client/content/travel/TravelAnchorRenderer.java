@@ -17,6 +17,7 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.Direction;
@@ -29,33 +30,85 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.SingleThreadedRandomSource;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.neoforge.common.util.Lazy;
 import org.joml.Math;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
 public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> {
-    private static final Lazy<ArrayList<BakedQuad>> BACKDROP_QUADS = Lazy.of(() -> {
-        Minecraft minecraft = Minecraft.getInstance();
+    private static final Direction[] DIRECTIONS = Direction.values();
+    private final RandomSource random = new SingleThreadedRandomSource(42L);
+    private BakedModel backdropModel;
+    private List<BakedQuad> backdropQuads = List.of();
+    private String activeColorSetting, backgroundColorSetting;
+    private int activeColor, backgroundColor;
 
-        BakedModel outlineBlockModel = minecraft.getModelManager()
-            .getModel(EnderIOClient.TRAVEL_ANCHOR_BACKDROP_MODEL_LOCATION);
-
-        RandomSource randomSource = RandomSource.create(42L);
-
-        ArrayList<BakedQuad> bakedQuads = new ArrayList<>();
-        for (Direction dir : Direction.values()) {
-            // Should be exactly 1 quad per direction
-            bakedQuads.addAll(outlineBlockModel.getQuads(null, dir, randomSource));
+    private List<BakedQuad> backdrop(Minecraft minecraft) {
+        var model = minecraft.getModelManager().getModel(EnderIOClient.TRAVEL_ANCHOR_BACKDROP_MODEL_LOCATION);
+        if (model != backdropModel) {
+            var quads = new ArrayList<BakedQuad>();
+            random.setSeed(42L);
+            for (Direction direction : DIRECTIONS) {
+                quads.addAll(model.getQuads(null, direction, random));
+            }
+            backdropQuads = List.copyOf(quads);
+            backdropModel = model;
         }
-        return bakedQuads;
-    });
+        return backdropQuads;
+    }
+
+    private int outlineColor(boolean active) {
+        if (active) {
+            String setting = BaseConfig.CLIENT.ANCHORS_ACTIVE_COLOR.get();
+            if (!setting.equals(activeColorSetting)) {
+                activeColor = FastColor.ARGB32.color(255, Integer.parseInt(setting, 16));
+                activeColorSetting = setting;
+            }
+            return activeColor;
+        }
+        String setting = BaseConfig.CLIENT.ANCHORS_BACKGROUND_COLOR.get();
+        if (!setting.equals(backgroundColorSetting)) {
+            backgroundColor = FastColor.ARGB32.color(255, Integer.parseInt(setting, 16));
+            backgroundColorSetting = setting;
+        }
+        return backgroundColor;
+    }
+
+    private static double scale(Minecraft minecraft, double distance, boolean active) {
+        return Math.max(1, (float) Math.sqrt(distance) * (active ? 1.3 : 1)
+            * Math.sin(Math.toRadians(minecraft.options.fov().get() / 4d)));
+    }
+
+    @Override
+    public boolean isVisible(AnchorTravelTarget target, Camera camera, Frustum frustum, boolean active) {
+        if (!target.isVisible()) {
+            return false;
+        }
+        var blockBounds = new AABB(target.pos());
+        if (frustum.isVisible(blockBounds)) {
+            return true;
+        }
+        // Item renderers and painted models may draw arbitrary geometry beyond a block.
+        Minecraft minecraft = Minecraft.getInstance();
+        if (target.icon() != Items.AIR || minecraft.level.getBlockEntity(target.pos()) instanceof PaintedTravelAnchorBlockEntity) {
+            return true;
+        }
+        double extent = 5;
+        String name = target.name().trim();
+        if (!name.isEmpty()) {
+            extent = Math.max(extent, minecraft.font.width(name) * 0.05 + minecraft.font.lineHeight * 0.2 + 2);
+        }
+        double distance = camera.getPosition().distanceTo(target.pos().getCenter());
+        return frustum.isVisible(blockBounds.inflate(extent * scale(minecraft, distance, active)));
+    }
 
     @Override
     public void render(AnchorTravelTarget travelData, LevelRenderer levelRenderer, PoseStack poseStack,
@@ -74,12 +127,7 @@ public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> 
         double distanceToCamera = offsetToCamera.length();
 
         {
-            double anchorScale = (float) Math.sqrt(distanceToCamera);
-            if (active) {
-                anchorScale = anchorScale * 1.3;
-            }
-            anchorScale = anchorScale * (Math.sin(Math.toRadians(minecraft.options.fov().get() / 4d)));
-            anchorScale = Math.max(anchorScale, 1.0F);
+            double anchorScale = scale(minecraft, distanceToCamera, active);
 
             poseStack.translate(0.5, 0.5, 0.5);
             float s = (float) anchorScale;
@@ -88,10 +136,8 @@ public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> 
         }
 
         OutlineBuffer buffer = OutlineBuffer.INSTANCE;
-        int outlineColor = FastColor.ARGB32.color(255,
-            Integer.parseInt(active ? BaseConfig.CLIENT.ANCHORS_ACTIVE_COLOR.get() : BaseConfig.CLIENT.ANCHORS_BACKGROUND_COLOR.get(), 16));
-        int textColor = FastColor.ARGB32.color(255,
-            Integer.parseInt(active ? BaseConfig.CLIENT.ANCHORS_ACTIVE_COLOR.get() : "FFFFFF", 16));
+        int outlineColor = outlineColor(active);
+        int textColor = active ? outlineColor : 0xFFFFFFFF;
         float outlineR = ((outlineColor >> 16) & 0xFF) / 255F;
         float outlineG = ((outlineColor >> 8) & 0xFF) / 255F;
         float outlineB = (outlineColor & 0xFF) / 255F;
@@ -128,25 +174,15 @@ public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> 
                 BakedModel blockModel = minecraft.getBlockRenderer().getBlockModel(blockState);
                 BlockColors blockColors = minecraft.getBlockColors();
 
-                var randomSource = RandomSource.create(42L);
-                ArrayList<BakedQuad> quads = new ArrayList<>(blockModel.getQuads(blockState, null, randomSource));
-                for (Direction direction : Direction.values()) {
-                    randomSource.setSeed(42L);
-                    quads.addAll(blockModel.getQuads(blockState, direction, randomSource));
-                }
-
-                for (BakedQuad quad : quads) {
-                    int tintIndex = quad.getTintIndex();
-                    float r = 1F, g = 1F, b = 1F;
-
-                    if (tintIndex != -1) {
-                        int color = blockColors.getColor(blockState, minecraft.level, travelData.pos(), tintIndex);
-                        r = ((color >> 16) & 0xFF) / 255F;
-                        g = ((color >> 8) & 0xFF) / 255F;
-                        b = (color & 0xFF) / 255F;
+                for (int face = -1; face < DIRECTIONS.length; face++) {
+                    random.setSeed(42L);
+                    Direction direction = face < 0 ? null : DIRECTIONS[face];
+                    for (BakedQuad quad : blockModel.getQuads(blockState, direction, random)) {
+                        int tint = quad.getTintIndex() == -1 ? 0xFFFFFF
+                            : blockColors.getColor(blockState, minecraft.level, travelData.pos(), quad.getTintIndex());
+                        renderBuffer.putBulkData(poseStack.last(), quad, ((tint >> 16) & 0xFF) / 255F,
+                            ((tint >> 8) & 0xFF) / 255F, (tint & 0xFF) / 255F, 1, packedLight, OverlayTexture.NO_OVERLAY);
                     }
-
-                    renderBuffer.putBulkData(poseStack.last(), quad, r, g, b, 1.0F, packedLight, OverlayTexture.NO_OVERLAY);
                 }
             }
 
@@ -161,7 +197,7 @@ public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> 
                 poseStack.translate(offset.x, offset.y, offset.z);
                 poseStack.scale(scale, scale, scale);
 
-                for (BakedQuad quad : BACKDROP_QUADS.get()) {
+                for (BakedQuad quad : backdrop(minecraft)) {
                     renderBuffer.putBulkData(poseStack.last(), quad, outlineR, outlineG, outlineB, 1, packedLight, OverlayTexture.NO_OVERLAY);
                 }
 
@@ -197,7 +233,7 @@ public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> 
                 poseStack.translate(-0.5, -0.5, -2);
                 poseStack.rotateAround(Axis.ZN.rotationDegrees(45), 0.5F, 0.5F, 0.5F);
 
-                for (BakedQuad quad : BACKDROP_QUADS.get()) {
+                for (BakedQuad quad : backdrop(minecraft)) {
                     renderBuffer.putBulkData(poseStack.last(), quad, outlineR, outlineG, outlineB, 1, packedLight, OverlayTexture.NO_OVERLAY);
                 }
 
@@ -248,7 +284,5 @@ public class TravelAnchorRenderer implements TravelRenderer<AnchorTravelTarget> 
         }
 
         poseStack.popPose();
-        // Seems to work fine without this line, but leaving it here in case there are future buffer problems
-        // minecraft.renderBuffers().bufferSource().endBatch();
     }
 }

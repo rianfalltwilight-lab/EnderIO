@@ -243,7 +243,9 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
             return;
         }
 
-        level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
+        if (!level.isClientSide()) {
+            level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_ALL);
+        }
         level.updateNeighborsAt(getBlockPos(), getBlockState().getBlock());
         level.invalidateCapabilities(getBlockPos());
         setChanged();

@@ -1,15 +1,20 @@
 package com.enderio.enderio.client.content.conduits.model.bundle;
 
-import com.enderio.core.common.util.Area;
 import com.enderio.core.data.model.ModelHelper;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.model.ConduitModelModifier;
 import com.enderio.enderio.client.content.conduits.model.ConduitTextureEmissiveQuadTransformer;
 import com.enderio.enderio.client.content.conduits.model.facades.ClientFacadeVisibility;
 import com.enderio.enderio.client.content.conduits.model.modifier.ConduitModelModifiers;
+import com.enderio.enderio.client.content.conduits.model.modifier.RedstoneConduitModelModifier;
 import com.enderio.enderio.client.foundation.model.BoxTextureQuadTransformer;
 import com.enderio.enderio.client.foundation.model.ColorQuadTransformer;
-import com.enderio.enderio.content.conduits.OffsetHelper;
+import com.enderio.enderio.content.conduits.type.energy.EnergyConduit;
+import com.enderio.enderio.content.conduits.type.fluid.FluidConduit;
+import com.enderio.enderio.content.conduits.type.item.ItemConduit;
+import com.enderio.enderio.content.conduits.type.redstone.RedstoneConduit;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.mojang.math.Axis;
 import com.mojang.math.Transformation;
 import net.minecraft.client.Minecraft;
@@ -40,11 +45,10 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static com.enderio.enderio.client.content.conduits.model.ConduitAdditionalModels.*;
 
@@ -53,186 +57,147 @@ public class ConduitBundleModel implements IDynamicBakedModel {
 
     private static final ChunkRenderTypeSet CUTOUT_SET = ChunkRenderTypeSet.of(RenderType.cutout());
 
+    private static final IQuadTransformer[] ROTATIONS = Arrays.stream(Direction.values())
+            .map(direction -> transformer(rotateTransformation(direction))).toArray(IQuadTransformer[]::new);
+    private static final Cache<Vec3i, IQuadTransformer> TRANSLATIONS = CacheBuilder.newBuilder().maximumSize(32).build();
+
+    private record QuadKey(ConduitBundleRenderState.Layout layout, Map<Holder<Conduit<?, ?>>, ResourceLocation> textures,
+                           @Nullable Direction side, @Nullable RenderType layer) {}
+    private static volatile @Nullable Cache<QuadKey, List<BakedQuad>> quadCache;
+
+    public static void onModelsBaked(boolean staticModels) {
+        quadCache = staticModels ? CacheBuilder.newBuilder().maximumSize(128).build() : null;
+    }
+
     @Override
     public List<BakedQuad> getQuads(@Nullable BlockState state, @Nullable Direction side, RandomSource rand,
             ModelData extraData, @Nullable RenderType renderType) {
+        var bundleState = extraData.get(ConduitBundleRenderState.PROPERTY);
+        if (bundleState == null || (bundleState.hasFacade() && bundleState.doesFacadeHideConduits() && ClientFacadeVisibility.areFacadesVisible())) {
+            return new ArrayList<>();
+        }
 
+        var cache = quadCache;
+        if (cache != null) {
+            var textures = cacheableTextures(bundleState);
+            if (textures != null) {
+                var key = new QuadKey(bundleState.layout(), textures, side, renderType);
+                var baked = cache.getIfPresent(key);
+                if (baked == null) {
+                    baked = bakeQuads(bundleState, state, side, rand, extraData, renderType, textures);
+                    cache.put(key, baked);
+                }
+                // Renderers may edit the list or its vertices. Keep the baked template private.
+                List<BakedQuad> output = new ArrayList<>(baked.size());
+                for (var quad : baked) {
+                    output.add(QuadTransformers.empty().process(quad));
+                }
+                return output;
+            }
+        }
+        return bakeQuads(bundleState, state, side, rand, extraData, renderType, null);
+    }
+
+    private static @Nullable Map<Holder<Conduit<?, ?>>, ResourceLocation> cacheableTextures(ConduitBundleRenderState bundle) {
+        Map<Holder<Conduit<?, ?>>, ResourceLocation> textures = new HashMap<>();
+        for (var holder : bundle.conduits()) {
+            var conduit = holder.value();
+            var modifier = ConduitModelModifiers.getModifier(conduit.type());
+            if (!(conduit instanceof ItemConduit || conduit instanceof FluidConduit || conduit instanceof EnergyConduit || conduit instanceof RedstoneConduit)
+                    || (modifier != null && modifier.getClass() != RedstoneConduitModelModifier.class)) {
+                return null;
+            }
+            textures.put(holder, modifier == null ? conduit.texture() : modifier.getTexture(holder, bundle.getExtraWorldData(holder)));
+        }
+        return textures;
+    }
+
+    private static List<BakedQuad> bakeQuads(ConduitBundleRenderState bundleState, @Nullable BlockState state, @Nullable Direction side,
+            RandomSource rand, ModelData extraData, @Nullable RenderType renderType, @Nullable Map<Holder<Conduit<?, ?>>, ResourceLocation> textures) {
         List<BakedQuad> quads = new ArrayList<>();
-        ConduitBundleRenderState bundleState = extraData.get(ConduitBundleRenderState.PROPERTY);
+        for (Direction direction : Direction.values()) {
+            var face = bundleState.layout().faces().get(direction);
+            boolean isEnd = face.endpoint();
+            Direction preRotation = rotateDirection(direction, side);
+            IQuadTransformer rotation = ROTATIONS[direction.ordinal()];
 
-        if (bundleState != null) {
-            // If the facade should hide the conduits, escape early.
-            if (ClientFacadeVisibility.areFacadesVisible() && bundleState.hasFacade() && bundleState.doesFacadeHideConduits()) {
-                return quads;
+            if (isEnd) {
+                quads.addAll(rotation.process(
+                        modelOf(CONDUIT_CONNECTOR).getQuads(state, preRotation, rand, extraData, renderType)));
             }
 
-            Direction.Axis axis = bundleState.mainAxis();
-            Map<Holder<Conduit<?, ?>>, List<Vec3i>> offsets = new HashMap<>();
+            for (var part : face.segments()) {
+                var conduit = part.conduit();
+                IQuadTransformer rotationTranslation = rotation.andThen(translation(part.offset()));
+                var texture = textures == null ? bundleState.getTexture(conduit) : textures.get(conduit);
+                quads.addAll(new ConduitTextureEmissiveQuadTransformer(sprite(texture), 0)
+                        .andThen(rotationTranslation)
+                        .process(modelOf(CONDUIT_CONNECTION).getQuads(state, preRotation, rand, extraData,
+                                renderType)));
 
-            for (Direction direction : Direction.values()) {
-                boolean isEnd = bundleState.isConnectionEndpoint(direction);
-                Direction preRotation = rotateDirection(direction, side);
-                IQuadTransformer rotation = QuadTransformers.applying(rotateTransformation(direction));
+                ConduitModelModifier conduitModelModifier = textures == null ? ConduitModelModifiers.getModifier(conduit.value().type()) : null;
+                if (conduitModelModifier != null) {
+                    CompoundTag extraWorldData = bundleState.getExtraWorldData(conduit);
+                    quads.addAll(rotationTranslation.process(conduitModelModifier.createConnectionQuads(conduit,
+                            extraWorldData, side, direction, rand, renderType)));
+                }
 
                 if (isEnd) {
-                    quads.addAll(rotation.process(
-                            modelOf(CONDUIT_CONNECTOR).getQuads(state, preRotation, rand, extraData, renderType)));
-                }
+                    quads.addAll(rotationTranslation.process(modelOf(CONDUIT_CONNECTION_BOX).getQuads(state,
+                            preRotation, rand, extraData, renderType)));
 
-                var connectedTypes = bundleState.getConnectedConduits(direction);
-                for (int i = 0; i < connectedTypes.size(); i++) {
-                    Holder<Conduit<?, ?>> conduit = connectedTypes.get(i);
-                    CompoundTag extraWorldData = bundleState.getExtraWorldData(conduit);
+                    var connectionState = face.connections().get(conduit);
+                    if (connectionState != null) {
+                        IQuadTransformer color = rotationTranslation.andThen(new ColorQuadTransformer(
+                                connectionState.inputChannel(), connectionState.outputChannel()));
 
-                    Vec3i offset = OffsetHelper.translationFor(direction.getAxis(),
-                            OffsetHelper.offsetConduit(i, connectedTypes.size()));
-                    offsets.computeIfAbsent(conduit, ignored -> new ArrayList<>()).add(offset);
-                    IQuadTransformer rotationTranslation = rotation
-                            .andThen(QuadTransformers.applying(translateTransformation(offset)));
-                    quads.addAll(new ConduitTextureEmissiveQuadTransformer(sprite(bundleState.getTexture(conduit)), 0)
-                            .andThen(rotationTranslation)
-                            .process(modelOf(CONDUIT_CONNECTION).getQuads(state, preRotation, rand, extraData,
-                                    renderType)));
+                        BakedModel model = null;
+                        if (connectionState.canInput() && connectionState.canOutput()) {
+                            model = modelOf(CONDUIT_IO_IN_OUT);
+                        } else if (connectionState.canInput()) {
+                            model = modelOf(CONDUIT_IO_IN);
+                        } else if (connectionState.canOutput()) {
+                            model = modelOf(CONDUIT_IO_OUT);
+                        }
 
-                    ConduitModelModifier conduitModelModifier = ConduitModelModifiers
-                            .getModifier(conduit.value().type());
-                    if (conduitModelModifier != null) {
-                        quads.addAll(rotationTranslation.process(conduitModelModifier.createConnectionQuads(conduit,
-                                extraWorldData, side, direction, rand, renderType)));
-                    }
+                        if (model != null) {
+                            quads.addAll(
+                                    color.process(model.getQuads(state, preRotation, rand, extraData, renderType)));
+                        }
 
-                    if (isEnd) {
-                        quads.addAll(rotationTranslation.process(modelOf(CONDUIT_CONNECTION_BOX).getQuads(state,
-                                preRotation, rand, extraData, renderType)));
-
-                        var connectionState = bundleState.getConnectionState(direction, conduit);
-                        if (connectionState != null) {
-                            IQuadTransformer color = rotationTranslation.andThen(new ColorQuadTransformer(
-                                    connectionState.inputChannel(), connectionState.outputChannel()));
-
-                            BakedModel model = null;
-                            if (connectionState.canInput() && connectionState.canOutput()) {
-                                model = modelOf(CONDUIT_IO_IN_OUT);
-                            } else if (connectionState.canInput()) {
-                                model = modelOf(CONDUIT_IO_IN);
-                            } else if (connectionState.canOutput()) {
-                                model = modelOf(CONDUIT_IO_OUT);
-                            }
-
-                            if (model != null) {
-                                quads.addAll(
-                                        color.process(model.getQuads(state, preRotation, rand, extraData, renderType)));
-                            }
-
-                            // TODO: Need support for dual-color redstone control.
-                            if (connectionState.isRedstoneSensitive()) {
-                                quads.addAll(rotationTranslation
-                                        .andThen(new ColorQuadTransformer(null, connectionState.redstoneChannel()))
-                                        .process(modelOf(CONDUIT_IO_REDSTONE).getQuads(state, preRotation, rand,
-                                                extraData, renderType)));
-
-                                // TODO: Use this to render two redstone signal colours?
-//                                // Shrink the size
-//                                var scale = new Vector3f(1, 0.5f, 1);
-//
-//                                // move into position
-//                                var transformation = new Transformation(new Vector3f(0, 4 / 32f, 0), null, scale, null);
-//                                var transformation1 = new Transformation(new Vector3f(0, 5 / 32f, 0), null, scale, null);
-//
-//                                quads.addAll(QuadTransformers.applying(transformation)
-//                                    .andThen(rotationTranslation)
-//                                    .andThen(new ColorQuadTransformer(null, connectionState.extractRedstoneChannel()))
-//                                    .process(modelOf(CONDUIT_IO_REDSTONE).getQuads(state, preRotation, rand,
-//                                        extraData, renderType)));
-//
-//                                quads.addAll(QuadTransformers.applying(transformation1)
-//                                        .andThen(rotationTranslation)
-////                                        .andThen(QuadTransformers.applying(translateTransformation(normal.mul(-1 / 16f))))
-//                                        .andThen(new ColorQuadTransformer(null, DyeColor.GREEN))
-//                                        .process(modelOf(CONDUIT_IO_REDSTONE).getQuads(state, preRotation, rand,
-//                                                extraData, renderType)));
-                            }
+                        // TODO: Need support for dual-color redstone control.
+                        if (connectionState.isRedstoneSensitive()) {
+                            quads.addAll(rotationTranslation
+                                    .andThen(new ColorQuadTransformer(null, connectionState.redstoneChannel()))
+                                    .process(modelOf(CONDUIT_IO_REDSTONE).getQuads(state, preRotation, rand,
+                                            extraData, renderType)));
                         }
                     }
-                }
-            }
-
-            var allTypes = bundleState.conduits();
-            @Nullable
-            Area box = null;
-            Map<Holder<Conduit<?, ?>>, Integer> notRendered = new HashMap<>();
-            List<Holder<Conduit<?, ?>>> rendered = new ArrayList<>();
-            for (int i = 0; i < allTypes.size(); i++) {
-                var type = allTypes.get(i);
-                @Nullable
-                List<Vec3i> offsetsForType = offsets.get(type);
-                if (offsetsForType != null) {
-                    // all are pointing to the same xyz reference meaning that we can draw the core
-                    if (offsetsForType.stream().distinct().count() == 1) {
-                        rendered.add(type);
-                    } else {
-                        if (box == null) {
-                            box = new Area(offsetsForType.toArray(new Vec3i[0]));
-                        } else {
-                            offsetsForType.forEach(box::makeContain);
-                        }
-                    }
-                } else {
-                    notRendered.put(type, i);
-                }
-            }
-
-            Set<Vec3i> duplicateFinder = new HashSet<>();
-            // rendered have only one distinct pos, so I can safely assume get(0) is valid
-            List<Vec3i> duplicatePositions = rendered.stream()
-                    .map(offsets::get)
-                    .map(List::getFirst)
-                    .filter(n -> !duplicateFinder.add(n))
-                    .toList();
-            for (Vec3i duplicatePosition : duplicatePositions) {
-                if (box == null) {
-                    box = new Area(duplicatePosition);
-                } else {
-                    box.makeContain(duplicatePosition);
-                }
-            }
-            for (Holder<Conduit<?, ?>> toRender : rendered) {
-                List<Vec3i> offsetsForType = offsets.get(toRender);
-                if (box == null || !box.contains(offsetsForType.getFirst())) {
-                    quads.addAll(new ConduitTextureEmissiveQuadTransformer(sprite(bundleState.getTexture(toRender)), 0)
-                            .andThen(QuadTransformers.applying(translateTransformation(offsetsForType.getFirst())))
-                            .process(modelOf(CONDUIT_CORE).getQuads(state, side, rand, extraData, renderType)));
-                }
-            }
-
-            if (box != null) {
-                for (Map.Entry<Holder<Conduit<?, ?>>, Integer> notRenderedEntry : notRendered.entrySet()) {
-                    Vec3i offset = OffsetHelper.translationFor(axis,
-                            OffsetHelper.offsetConduit(notRenderedEntry.getValue(), allTypes.size()));
-                    if (!box.contains(offset)) {
-                        quads.addAll(new ConduitTextureEmissiveQuadTransformer(
-                                sprite(bundleState.getTexture(notRenderedEntry.getKey())), 0)
-                                        .andThen(QuadTransformers.applying(translateTransformation(offset)))
-                                        .process(modelOf(CONDUIT_CORE).getQuads(state, side, rand, extraData,
-                                                renderType)));
-                    }
-                }
-
-                quads.addAll(new BoxTextureQuadTransformer(box.size())
-                        .andThen(QuadTransformers.applying(translateTransformation(box.getMin())))
-                        .process(modelOf(BOX).getQuads(state, side, rand, extraData, renderType)));
-            } else {
-                for (Map.Entry<Holder<Conduit<?, ?>>, Integer> notRenderedEntry : notRendered.entrySet()) {
-                    quads.addAll(new ConduitTextureEmissiveQuadTransformer(
-                            sprite(bundleState.getTexture(notRenderedEntry.getKey())), 0).andThen(
-                                    QuadTransformers.applying(translateTransformation(OffsetHelper.translationFor(axis,
-                                            OffsetHelper.offsetConduit(notRenderedEntry.getValue(), allTypes.size())))))
-                                    .process(modelOf(CONDUIT_CORE).getQuads(state, side, rand, extraData, renderType)));
                 }
             }
         }
 
+        var layout = bundleState.layout();
+        for (var core : layout.cores()) {
+            var texture = textures == null ? bundleState.getTexture(core.conduit()) : textures.get(core.conduit());
+            quads.addAll(new ConduitTextureEmissiveQuadTransformer(sprite(texture), 0)
+                    .andThen(translation(core.offset())).process(modelOf(CONDUIT_CORE).getQuads(state, side, rand, extraData, renderType)));
+        }
+        if (layout.boxMin() != null) {
+            quads.addAll(new BoxTextureQuadTransformer(layout.boxSize()).andThen(translation(layout.boxMin()))
+                    .process(modelOf(BOX).getQuads(state, side, rand, extraData, renderType)));
+        }
         return quads;
+    }
+
+    private static IQuadTransformer translation(Vec3i offset) {
+        return TRANSLATIONS.asMap().computeIfAbsent(offset, position -> transformer(translateTransformation(position)));
+    }
+
+    private static IQuadTransformer transformer(Transformation transform) {
+        // NeoForge initializes and mutates the normal matrix on first use. Finish it before sharing across chunk workers.
+        transform.getNormalMatrix();
+        return QuadTransformers.applying(transform);
     }
 
     /**
@@ -273,10 +238,6 @@ public class ConduitBundleModel implements IDynamicBakedModel {
 
     private static Transformation translateTransformation(Vec3i offset) {
         return new Transformation(scale(offset, 3 / 16f), null, null, null);
-    }
-
-    private static Transformation translateTransformation(Vector3f offset) {
-        return new Transformation(offset, null, null, null);
     }
 
     private static Vector3f scale(Vec3i vector, float scaler) {
@@ -346,16 +307,14 @@ public class ConduitBundleModel implements IDynamicBakedModel {
     @Override
     public ModelData getModelData(BlockAndTintGetter level, BlockPos pos, BlockState state, ModelData modelData) {
         ModelData data = IDynamicBakedModel.super.getModelData(level, pos, state, modelData);
-        ModelData.Builder builder = data.derive();
-
         ConduitBundleRenderState bundleState = data.get(ConduitBundleRenderState.PROPERTY);
-        if (bundleState != null && bundleState.hasFacade()) {
-            BlockState blockState = bundleState.facade();
-            BakedModel blockModel = Minecraft.getInstance().getBlockRenderer().getBlockModel(blockState);
-            ModelData facadeData = blockModel.getModelData(level, pos, blockState, ModelData.EMPTY);
-            builder.with(FACADE_MODEL_DATA, facadeData);
+        if (bundleState == null || !bundleState.hasFacade()) {
+            return data;
         }
-        return builder.build();
+        BlockState blockState = bundleState.facade();
+        BakedModel blockModel = Minecraft.getInstance().getBlockRenderer().getBlockModel(blockState);
+        ModelData facadeData = blockModel.getModelData(level, pos, blockState, ModelData.EMPTY);
+        return data.derive().with(FACADE_MODEL_DATA, facadeData).build();
     }
 
     private static TextureAtlasSprite sprite(ResourceLocation location) {

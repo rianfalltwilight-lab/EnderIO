@@ -1,11 +1,7 @@
 package com.enderio.enderio.client.content.conduits.model;
 
-import com.enderio.core.client.RenderUtil;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.world.inventory.InventoryMenu;
 import net.neoforged.neoforge.client.model.IQuadTransformer;
 import net.neoforged.neoforge.client.model.QuadTransformers;
 
@@ -17,19 +13,18 @@ public record ConduitTextureEmissiveQuadTransformer(TextureAtlasSprite newSprite
             QuadTransformers.settingEmissivity(lightLevel).processInPlace(quad);
         }
 
+        var vertices = quad.getVertices();
+        var oldSprite = quad.getSprite();
+        var oldSize = oldSprite.contents();
+        var newSize = newSprite.contents();
         for (int i = 0; i < 4; i++) {
-            float[] uv0 = RenderUtil.unpackVertices(quad.getVertices(), i, IQuadTransformer.UV0, 2);
-            uv0[0] = (uv0[0] - quad.getSprite().getU0()) * newSprite.contents().width() / quad.getSprite().contents().width() + newSprite.getU0();
-            uv0[1] = (uv0[1] - quad.getSprite().getV0()) * newSprite.contents().height() / quad.getSprite().contents().height() + newSprite.getV0();
-            int[] packedTextureData = RenderUtil.packUV(uv0[0], uv0[1]);
-            quad.getVertices()[IQuadTransformer.UV0 + i * IQuadTransformer.STRIDE] = packedTextureData[0];
-            quad.getVertices()[IQuadTransformer.UV0 + 1 + i * IQuadTransformer.STRIDE] = packedTextureData[1];
+            int uv = i * STRIDE + UV0;
+            float u = (Float.intBitsToFloat(vertices[uv]) - oldSprite.getU0()) * newSize.width() / oldSize.width() + newSprite.getU0();
+            float v = (Float.intBitsToFloat(vertices[uv + 1]) - oldSprite.getV0()) * newSize.height() / oldSize.height() + newSprite.getV0();
+            vertices[uv] = Float.floatToRawIntBits(u);
+            vertices[uv + 1] = Float.floatToRawIntBits(v);
         }
         quad.sprite = newSprite;
-    }
-
-    private static TextureAtlas blockAtlas() {
-        return Minecraft.getInstance().getModelManager().getAtlas(InventoryMenu.BLOCK_ATLAS);
     }
 
 }

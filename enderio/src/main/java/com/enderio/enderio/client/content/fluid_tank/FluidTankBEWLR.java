@@ -15,6 +15,7 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.client.resources.model.ModelResourceLocation;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.capabilities.Capabilities;
@@ -22,10 +23,14 @@ import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtension
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.capability.IFluidHandlerItem;
 
+import java.util.IdentityHashMap;
+import java.util.Map;
+
 // TODO: No longer lights in the inventory/hand like other machines...
 public class FluidTankBEWLR extends BlockEntityWithoutLevelRenderer {
     public static final FluidTankBEWLR INSTANCE = new FluidTankBEWLR(
             Minecraft.getInstance().getBlockEntityRenderDispatcher(), Minecraft.getInstance().getEntityModels());
+    private final Map<Item, ModelResourceLocation> tankModels = new IdentityHashMap<>();
 
     public FluidTankBEWLR(BlockEntityRenderDispatcher blockEntityRenderDispatcher, EntityModelSet entityModelSet) {
         super(blockEntityRenderDispatcher, entityModelSet);
@@ -37,7 +42,8 @@ public class FluidTankBEWLR extends BlockEntityWithoutLevelRenderer {
         // Get the model for the fluid tank block
         BakedModel model = Minecraft.getInstance()
                 .getModelManager()
-                .getModel(new ModelResourceLocation(BuiltInRegistries.ITEM.getKey(stack.getItem()), "facing=north"));
+                .getModel(tankModels.computeIfAbsent(stack.getItem(),
+                        item -> new ModelResourceLocation(BuiltInRegistries.ITEM.getKey(item), "facing=north")));
         poseStack.pushPose();
 
         // Render the main model

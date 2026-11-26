@@ -42,6 +42,7 @@ import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.SingleThreadedRandomSource;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -56,7 +57,6 @@ import org.joml.Vector3f;
 import org.joml.Vector4f;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -84,9 +84,12 @@ public class IOConfigOverlay extends BaseOverlay {
     private static final Minecraft MINECRAFT = Minecraft.getInstance();
     private static MultiBufferSource.BufferSource ghostBuffers;
     private static MultiBufferSource.BufferSource solidBuffers;
+    private static MultiBufferSource.BufferSource originalBuffers;
+    private final RandomSource renderRandom = new SingleThreadedRandomSource(42L);
     private final Vector3f worldOrigin;
     private final Vector3f multiblockSize;
     private final List<BlockPos> configurable = new ArrayList<>();
+    private final BlockHitResult[] rayHits;
     private final List<BlockPos> neighbours = new ArrayList<>();
     private float scale = 20;
     private float pitch;
@@ -101,6 +104,7 @@ public class IOConfigOverlay extends BaseOverlay {
     public IOConfigOverlay(int x, int y, int width, int height, List<BlockPos> _configurable) {
         super(x, y, width, height, Component.empty());
         this.configurable.addAll(_configurable);
+        rayHits = new BlockHitResult[configurable.size()];
 
         if (configurable.size() == 1) {
             BlockPos bc = configurable.get(0);
@@ -165,6 +169,9 @@ public class IOConfigOverlay extends BaseOverlay {
     }
 
     private void initBuffers(MultiBufferSource.BufferSource original) {
+        if (originalBuffers == original) {
+            return;
+        }
         ByteBufferBuilder fallback = original.sharedBuffer;
         SequencedMap<RenderType, ByteBufferBuilder> layerBuffers = original.fixedBuffers;
         SequencedMap<RenderType, ByteBufferBuilder> ghostLayers = new Object2ObjectLinkedOpenHashMap<>();
@@ -176,6 +183,7 @@ public class IOConfigOverlay extends BaseOverlay {
         }
         ghostBuffers = new GhostBuffers(fallback, ghostLayers);
         solidBuffers = new SolidBuffers(fallback, solidLayers);
+        originalBuffers = original;
     }
 
     private static Vec3 transform(Vec3 vec, Matrix4f transform) {
@@ -189,20 +197,56 @@ public class IOConfigOverlay extends BaseOverlay {
     }
 
     @Nullable
-    private BlockHitResult raycast(BlockPos pos, BlockState state, float diffX, float diffY, Matrix4f transform) {
-        // Add mouse offset to start and end vectors
-        Vec3 start = RAY_START.add(diffX, diffY, 0);
-        Vec3 end = RAY_END.add(diffX, diffY, 0);
+    static BlockHitResult raycast(BlockPos pos, VoxelShape shape, Vector3f origin, Vec3 start, Vec3 end) {
+        float x = pos.getX() + 0.5f - origin.x;
+        float y = pos.getY() + 0.5f - origin.y;
+        float z = pos.getZ() + 0.5f - origin.z;
+        return shape.clip(start.subtract(x, y, z), end.subtract(x, y, z), POS);
+    }
 
-        // Rotate start and end vectors around the block
-        start = transform(start, transform);
-        end = transform(end, transform);
+    private Optional<SelectedFace> selectFace(float diffX, float diffY, Matrix4f transform) {
+        Vec3 start = transform(RAY_START.add(diffX, diffY, 0), transform);
+        Vec3 end = transform(RAY_END.add(diffX, diffY, 0), transform);
+        Vec3 eye = transform(RAY_START, transform).add(worldOrigin.x, worldOrigin.y, worldOrigin.z);
+        double bestDistance = Double.POSITIVE_INFINITY;
+        int best = -1;
+        boolean tied = false;
+        for (int i = 0; i < configurable.size(); i++) {
+            BlockPos pos = configurable.get(i);
+            VoxelShape shape = MINECRAFT.level.getBlockState(pos).getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+            BlockHitResult hit = raycast(pos, shape, worldOrigin, start, end);
+            rayHits[i] = hit;
+            if (hit != null && hit.getType() != HitResult.Type.MISS) {
+                double distance = pos.distToCenterSqr(eye);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = i;
+                    tied = false;
+                } else if (distance == bestDistance) {
+                    tied = true;
+                }
+            }
+        }
+        if (tied) {
+            return selectTiedFace(configurable, rayHits, eye, bestDistance);
+        }
+        return best < 0 ? Optional.empty() : Optional.of(new SelectedFace(configurable.get(best), rayHits[best].getDirection()));
+    }
 
-        // Get block's shape and cast a ray through it
-        VoxelShape shape = state.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
-        Vector3f centerPos = new Vector3f(pos.getX() + 0.5f, pos.getY() + 0.5f, pos.getZ() + 0.5f).sub(worldOrigin);
-        shape = shape.move(centerPos.x(), centerPos.y(), centerPos.z());
-        return shape.clip(start, end, POS);
+    static Optional<SelectedFace> selectTiedFace(List<BlockPos> positions, BlockHitResult[] rayHits, Vec3 eye, double bestDistance) {
+        // The original picker broke equal center distances by HashMap entry order.
+        Map<BlockHitResult, BlockPos> hits = new HashMap<>();
+        for (int i = 0; i < rayHits.length; i++) {
+            if (rayHits[i] != null && rayHits[i].getType() != HitResult.Type.MISS) {
+                hits.put(rayHits[i], positions.get(i));
+            }
+        }
+        for (var entry : hits.entrySet()) {
+            if (entry.getValue().distToCenterSqr(eye) == bestDistance) {
+                return Optional.of(new SelectedFace(entry.getValue(), entry.getKey().getDirection()));
+            }
+        }
+        return Optional.empty();
     }
 
     public void toggleNeighbourVisibility() {
@@ -302,24 +346,7 @@ public class IOConfigOverlay extends BaseOverlay {
             // Rotate around X (pitch) in negative direction
             rayTransform.rotate(rotPitch);
 
-            // Ray-cast hit on block shape
-            Map<BlockHitResult, BlockPos> hits = new HashMap<>();
-            configurable.forEach(blockPos -> {
-                BlockState state = MINECRAFT.level.getBlockState(blockPos);
-                BlockHitResult hit = raycast(blockPos, state, diffX, diffY, rayTransform);
-                if (hit != null && hit.getType() != HitResult.Type.MISS) {
-                    hits.put(hit, blockPos);
-                }
-
-            });
-
-            Vec3 eyePosition = transform(RAY_START, rayTransform).add(worldOrigin.x, worldOrigin.y, worldOrigin.z);
-            selection = hits.entrySet()
-                    .stream()
-                    .min(Comparator.comparingDouble(entry -> entry.getValue().distToCenterSqr(eyePosition))) // find
-                                                                                                             // closest
-                                                                                                             // to eye
-                    .map(closest -> new SelectedFace(closest.getValue(), closest.getKey().getDirection()));
+            selection = selectFace(diffX, diffY, rayTransform);
 
             renderSelection(guiGraphics, centerX, centerY, blockTransform);
             renderOverlay(guiGraphics);
@@ -380,7 +407,8 @@ public class IOConfigOverlay extends BaseOverlay {
             float r = FastColor.ARGB32.red(blockColor) / 255F;
             float g = FastColor.ARGB32.green(blockColor) / 255F;
             float b = FastColor.ARGB32.blue(blockColor) / 255F;
-            for (RenderType renderType : bakedmodel.getRenderTypes(blockState, RandomSource.create(42), modelData)) {
+            renderRandom.setSeed(42L);
+            for (RenderType renderType : bakedmodel.getRenderTypes(blockState, renderRandom, modelData)) {
                 renderer.getModelRenderer()
                         .renderModel(guiGraphics.pose().last(),
                                 buffers.getBuffer(RenderTypeHelper.getEntityRenderType(renderType, false)), blockState,
@@ -473,7 +501,7 @@ public class IOConfigOverlay extends BaseOverlay {
     protected void updateWidgetNarration(NarrationElementOutput narrationElementOutput) {
     }
 
-    private record SelectedFace(BlockPos blockPos, Direction side) {
+    record SelectedFace(BlockPos blockPos, Direction side) {
     }
 
     private static class GhostBuffers extends MultiBufferSource.BufferSource {
