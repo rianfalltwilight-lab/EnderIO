@@ -21,6 +21,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.RenderShape;
@@ -36,6 +37,7 @@ import org.apache.commons.lang3.NotImplementedException;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 @EventBusSubscriber
@@ -124,6 +126,42 @@ public class CapacitorBankBlock extends EIOEntityBlock<CapacitorBankBlockEntity>
             capBank.removeNode();
         }
         super.onRemove(state, level, pos, newState, movedByPiston);
+    }
+
+    @Override
+    protected void onExplosionHit(BlockState state, Level level, BlockPos pos, Explosion explosion,
+        BiConsumer<ItemStack, BlockPos> dropConsumer) {
+        if (level.isClientSide() || !(level.getBlockEntity(pos) instanceof CapacitorBankBlockEntity bank)) {
+            super.onExplosionHit(state, level, pos, explosion, dropConsumer);
+            return;
+        }
+        int preview = bank.previewDropEnergy();
+        if (preview == 0) {
+            super.onExplosionHit(state, level, pos, explosion, dropConsumer);
+            return;
+        }
+        boolean[] settled = { false };
+        super.onExplosionHit(state, level, pos, explosion, (stack, dropPos) -> {
+            if (stack.is(state.getBlock().asItem()) && stack.getOrDefault(EIODataComponents.ENERGY, 0) == preview) {
+                stack.remove(EIODataComponents.ENERGY);
+                if (!settled[0]) {
+                    settled[0] = true;
+                    int amount = bank.claimDroppedEnergy();
+                    if (amount > 0) {
+                        if (stack.getCount() > 1) {
+                            ItemStack charged = stack.split(1);
+                            charged.set(EIODataComponents.ENERGY, amount);
+                            dropConsumer.accept(charged, dropPos);
+                        } else {
+                            stack.set(EIODataComponents.ENERGY, amount);
+                        }
+                    }
+                }
+            }
+            if (!stack.isEmpty()) {
+                dropConsumer.accept(stack, dropPos);
+            }
+        });
     }
 
     @SubscribeEvent(priority = EventPriority.LOWEST)

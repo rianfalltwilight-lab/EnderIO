@@ -215,13 +215,7 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
             }
 
             // Attempt to make connections for recovered nodes.
-            for (var entry : lazyNodes.entrySet()) {
-                Holder<Conduit<?, ?>> conduit = entry.getKey();
-
-                for (Direction dir : Direction.values()) {
-                    tryConnectTo(conduit, dir, false);
-                }
-            }
+            connectLazyNodes();
         }
 
         // Update lighting engine now that the bundle is loaded
@@ -1052,7 +1046,25 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         return false;
     }
 
+    private void connectLazyNodes() {
+        if (lazyNodes.isEmpty()) {
+            return;
+        }
+        for (var conduit : List.copyOf(lazyNodes.keySet())) {
+            if (!conduits.contains(conduit)) {
+                continue;
+            }
+            for (Direction dir : Direction.values()) {
+                tryConnectTo(conduit, dir, false);
+            }
+        }
+        lazyNodes.clear();
+    }
+
     private void checkConnections(Level level, boolean isNeighborChanged) {
+        if (!isNeighborChanged && !lazyNodes.isEmpty()) {
+            connectLazyNodes();
+        }
         // Third-party connection predicates can depend on other faces of the same block.
         for (Direction side : Direction.values()) {
             for (var conduit : conduits) {
@@ -1599,6 +1611,23 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
         // In that order setLevel saw an empty bundle, so restore the nodes before
         // connection updates or ticks can observe the newly loaded conduits.
         if (level instanceof ServerLevel) {
+            if (!conduitNodes.isEmpty()) {
+                var iterator = conduitNodes.entrySet().iterator();
+                while (iterator.hasNext()) {
+                    var entry = iterator.next();
+                    if (!conduits.contains(entry.getKey())) {
+                        var oldNode = entry.getValue();
+                        oldNode.detach();
+                        if (oldNode.isValid()) {
+                            oldNode.getNetwork().remove(oldNode);
+                        }
+                        iterator.remove();
+                        lazyNodes.remove(entry.getKey());
+                        neighbouringCapabilityCaches.remove(entry.getKey());
+                    }
+                }
+            }
+
             isLoading = true;
             try {
                 loadFromSavedData();

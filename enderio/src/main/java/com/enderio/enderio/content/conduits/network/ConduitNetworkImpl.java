@@ -578,7 +578,9 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             for (var endpoint : endpointConnections.values()) {
                 priorities.put(endpoint, byPriority.priorityGetter().apply(endpoint));
             }
-            pathComparator = new PriorityConnectionPathComparator(priorities::get, byPriority.fallbackComparator());
+            pathComparator = new PriorityConnectionPathComparator(
+                endpoint -> priorities.computeIfAbsent(endpoint, byPriority.priorityGetter()),
+                byPriority.fallbackComparator());
         }
 
         for (var connectionsList : accessiblePathsByConnection.values()) {

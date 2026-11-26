@@ -87,7 +87,7 @@ public class WirelessChargerBlockEntity extends PoweredMachineBlockEntity implem
                 // Players competing for the same budget must retain vanilla's entity section order.
                 for (Player nearby : level.getEntitiesOfClass(Player.class, bounds)) {
                     toDistribute = chargePlayer(nearby, energyStorage, toDistribute);
-                    if (toDistribute == 0) {
+                    if (toDistribute <= 0) {
                         break;
                     }
                 }
@@ -104,7 +104,7 @@ public class WirelessChargerBlockEntity extends PoweredMachineBlockEntity implem
         Inventory inventory = player.getInventory();
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             remaining = chargeStack(inventory.getItem(i), storage, remaining);
-            if (remaining == 0) {
+            if (remaining <= 0) {
                 return 0;
             }
         }
@@ -113,7 +113,7 @@ public class WirelessChargerBlockEntity extends PoweredMachineBlockEntity implem
         if (curios.isPresent()) {
             for (ItemStack stack : curios.get()) {
                 remaining = chargeStack(stack, storage, remaining);
-                if (remaining == 0) {
+                if (remaining <= 0) {
                     break;
                 }
             }
@@ -122,10 +122,10 @@ public class WirelessChargerBlockEntity extends PoweredMachineBlockEntity implem
     }
 
     private int chargeStack(ItemStack stack, PoweredMachineEnergyStorage storage, int remaining) {
-        if (!stack.isEmpty()) {
+        if (!stack.isEmpty() && remaining > 0) {
             IEnergyStorage cap = stack.getCapability(Capabilities.EnergyStorage.ITEM);
             if (cap != null && cap.canReceive()) {
-                int received = cap.receiveEnergy(remaining, false);
+                int received = Math.min(cap.receiveEnergy(remaining, false), remaining);
                 if (received > 0) {
                     storage.consumeEnergy(received);
                     return remaining - received;
