@@ -140,6 +140,40 @@ class CapacitorBankSyncTests {
     }
 
     @Test
+    void capabilityCallbacksCanInvalidateTargetsDuringCollectionAndOrdering(MinecraftServer server) {
+        var bank = mock(CapacitorBankBlockEntity.class);
+        when(bank.getBlockPos()).thenReturn(BlockPos.ZERO);
+        when(bank.tier()).thenReturn(CapacitorTier.BASIC);
+        var network = new CapacitorBankNode(bank).getNetwork();
+        var a = mock(IEnergyStorage.class);
+        var b = mock(IEnergyStorage.class);
+        var c = mock(IEnergyStorage.class);
+        when(a.getMaxEnergyStored()).thenAnswer(call -> {
+            network.targetsChanged();
+            return 100;
+        });
+        when(b.getMaxEnergyStored()).thenReturn(10);
+        for (var target : List.of(a, b, c)) {
+            when(target.receiveEnergy(1, false)).thenReturn(1);
+        }
+        var first = new CapacitorBankBlockEntity.SidedEnergy(a, new CapacitorBankNetwork.SidedPos(BlockPos.ZERO, Direction.WEST));
+        var second = new CapacitorBankBlockEntity.SidedEnergy(b, new CapacitorBankNetwork.SidedPos(BlockPos.ZERO, Direction.EAST));
+        var replacement = new CapacitorBankBlockEntity.SidedEnergy(c, new CapacitorBankNetwork.SidedPos(BlockPos.ZERO, Direction.NORTH));
+        when(bank.getValidPushTargets()).thenAnswer(call -> {
+            network.targetsChanged();
+            return Set.of(first);
+        }).thenReturn(new LinkedHashSet<>(List.of(first, second))).thenReturn(Set.of(replacement));
+        for (int tick = 0; tick < 3; tick++) {
+            network.receiveEnergy(BlockPos.ZERO, null, 1, false);
+            network.prepareEnergyToDistribute();
+            network.distributeEnergy();
+        }
+        for (var target : List.of(a, b, c)) {
+            verify(target).receiveEnergy(1, false);
+        }
+    }
+
+    @Test
     void aChunkWatcherAndMenuViewerEachReceiveOneSnapshot(MinecraftServer server) {
         var network = loaded().claimNode(BlockPos.ZERO).getNetwork();
         var watcher = mock(ServerPlayer.class);

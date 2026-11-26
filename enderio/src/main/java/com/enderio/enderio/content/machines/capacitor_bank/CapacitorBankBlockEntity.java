@@ -90,7 +90,8 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
 
     private final Map<Direction, BlockCapabilityCache<IEnergyStorage, Direction>> energyStorageCaches = new EnumMap<>(Direction.class);
     private final Set<SidedEnergy> validPushTargetCache = new HashSet<>();
-    private boolean isValidPushTargetCacheDirty = true;
+    private long pushTargetRevision;
+    private long cachedPushTargetRevision = -1;
 
     private static final ModelProperty<IOConfigurable> IO_CONFIG_PROPERTY = LegacyMachineBlockEntity.IO_CONFIG_PROPERTY;
     private static final String DISPLAY_MODES = "displaymodes";
@@ -196,7 +197,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     }
 
     private void invalidatePushTargets() {
-        isValidPushTargetCacheDirty = true;
+        pushTargetRevision++;
         if (node != null && node.isValid()) {
             node.getNetwork().targetsChanged();
         }
@@ -207,7 +208,8 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
             throw new IllegalStateException("getValidPushTargets can only be called on the server.");
         }
 
-        if (isValidPushTargetCacheDirty) {
+        long revision = pushTargetRevision;
+        if (cachedPushTargetRevision != revision) {
             validPushTargetCache.clear();
             for (Direction side : Direction.values()) {
                 if (side == Direction.UP) {
@@ -228,7 +230,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
                     validPushTargetCache.add(new SidedEnergy(energyStorage, new CapacitorBankNetwork.SidedPos(getBlockPos(), side)));
                 }
             }
-            isValidPushTargetCacheDirty = false;
+            cachedPushTargetRevision = revision;
         }
 
         return validPushTargetCache;

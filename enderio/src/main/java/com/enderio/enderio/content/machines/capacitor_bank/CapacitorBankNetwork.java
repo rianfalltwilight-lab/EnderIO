@@ -49,6 +49,7 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     @Nullable private List<BlockPos> positions;
     @Nullable private List<ChunkPos> chunks;
     @Nullable private List<PushTarget> targets;
+    private long targetRevision;
     private record View(List<BlockPos> topology, ClientboundCapacitorBankValuesPacket values) {}
     private final Map<ServerPlayer, View> viewers = new HashMap<>();
     @Nullable private ClientboundCapacitorBankValuesPacket lastValues;
@@ -119,6 +120,7 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
     }
 
     void targetsChanged() {
+        targetRevision++;
         targets = null;
     }
 
@@ -393,28 +395,35 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
         .thenComparingInt(PushTarget::originalIndex);
 
     private List<PushTarget> orderedTargets() {
-        if (targets == null) {
+        List<PushTarget> snapshot = targets;
+        if (snapshot == null) {
+            long revision = targetRevision;
             var collected = new ArrayList<PushTarget>();
-            for (var node : nodes()) {
+            for (var node : createNodeList()) {
                 if (node.hasBlockEntity()) {
                     for (var sided : node.getBlockEntity().getValidPushTargets()) {
                         collected.add(new PushTarget(sided, collected.size()));
                     }
                 }
             }
-            targets = collected;
+            snapshot = collected;
+            if (revision == targetRevision) {
+                targets = snapshot;
+            }
         }
         // Third-party energy buffers can change without invalidating their capability.
         // Keep the original tie order and retain a stable list if a receiver reenters distribution.
-        for (int i = 1; i < targets.size(); i++) {
-            if (TARGET_ORDER.compare(targets.get(i - 1), targets.get(i)) > 0) {
-                var sorted = new ArrayList<>(targets);
+        for (int i = 1; i < snapshot.size(); i++) {
+            if (TARGET_ORDER.compare(snapshot.get(i - 1), snapshot.get(i)) > 0) {
+                var sorted = new ArrayList<>(snapshot);
                 sorted.sort(TARGET_ORDER);
-                targets = sorted;
-                break;
+                if (targets == snapshot) {
+                    targets = sorted;
+                }
+                return sorted;
             }
         }
-        return targets;
+        return snapshot;
     }
 
     public void markDirty() {
