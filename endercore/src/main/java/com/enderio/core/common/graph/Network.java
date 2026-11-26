@@ -10,9 +10,11 @@ import com.mojang.datafixers.Products;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
+import java.util.HashSet;
 import java.util.Queue;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -38,6 +40,8 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
 
     // Whether the network has been discarded due to a merge.
     boolean isDiscarded;
+    // The bulk constructor accepts disconnected graphs. Their first removal must still discover every component.
+    boolean mayBeDisconnected;
 
     /**
      * Create a network with a single starting node.
@@ -70,9 +74,11 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
 
         // If some of these nodes are already in networks, the caller should use
         // connect/connectMany instead.
+        var nodeSet = new HashSet<>(nodes);
         Preconditions.checkArgument(
-                edges.stream().allMatch(e -> nodes.contains(e.getFirst()) && nodes.contains(e.getSecond())),
+                edges.stream().allMatch(e -> nodeSet.contains(e.getFirst()) && nodeSet.contains(e.getSecond())),
                 "Some edges reference nodes that were not included in the node list.");
+        mayBeDisconnected = true;
 
         // Add all nodes
         for (var node : nodes) {
@@ -83,8 +89,7 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
 
         // Add all edges (and nodes)
         for (var edge : edges) {
-            graph.putEdge(edge.getFirst(), edge.getSecond());
-            onNodesConnected(edge.getFirst(), edge.getSecond());
+            onNodesConnected(edge.getFirst(), edge.getSecond(), graph.putEdge(edge.getFirst(), edge.getSecond()));
         }
     }
 
@@ -176,8 +181,7 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
         }
 
         // Add the edge (and neighbor node if it is new)
-        graph.putEdge(node, neighbor);
-        onNodesConnected(node, neighbor);
+        onNodesConnected(node, neighbor, graph.putEdge(node, neighbor));
     }
 
     public final void connectMany(TNode node, List<TNode> neighbors) {
@@ -215,8 +219,7 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
             }
 
             // Add edges (and neighbor nodes if not present)
-            graph.putEdge(node, neighbor);
-            onNodesConnected(node, neighbor);
+            onNodesConnected(node, neighbor, graph.putEdge(node, neighbor));
         }
     }
 
@@ -224,6 +227,10 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
     }
 
     protected void onNodesConnected(TNode node1, TNode node2) {
+    }
+
+    protected void onNodesConnected(TNode node1, TNode node2, boolean added) {
+        onNodesConnected(node1, node2);
     }
 
     public final void disconnect(TNode node1, TNode node2) {
@@ -240,15 +247,19 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
         Preconditions.checkArgument(contains(node2), "Node 2 does not belong to this network");
 
         // Remove edge between these two nodes
-        graph.removeEdge(node1, node2);
+        boolean removed = graph.removeEdge(node1, node2);
 
         // Split networks if necessary
         splitIfRequired(onNetworkCreated);
 
-        onNodesDisconnected(node1, node2);
+        onNodesDisconnected(node1, node2, removed);
     }
 
     protected void onNodesDisconnected(TNode node1, TNode node2) {
+    }
+
+    protected void onNodesDisconnected(TNode node1, TNode node2, boolean removed) {
+        onNodesDisconnected(node1, node2);
     }
 
     public final void remove(TNode node) {
@@ -262,19 +273,26 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
         Preconditions.checkArgument(contains(node), "Node does not belong to this network");
 
         // Remove the node (also removes its edges)
+        int degree = graph.degree(node);
         graph.removeNode(node);
 
         // Invalidate the node
         node.setNetwork(null);
 
         // Split networks
-        splitIfRequired(onNetworkCreated);
+        if (degree > 1 || mayBeDisconnected) {
+            splitIfRequired(onNetworkCreated);
+        }
 
         // Fire remove event
-        onNodeRemoved(node);
+        onNodeRemoved(node, degree);
     }
 
     protected void onNodeRemoved(TNode node) {
+    }
+
+    protected void onNodeRemoved(TNode node, int degree) {
+        onNodeRemoved(node);
     }
 
     // endregion
@@ -288,6 +306,7 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
         }
 
         // Bring all nodes and edges into this network.
+        mayBeDisconnected |= other.mayBeDisconnected;
         other.graph.nodes().forEach(graph::addNode);
         other.graph.edges().forEach(graph::putEdge);
 
@@ -311,6 +330,7 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
     }
 
     private void splitIfRequired(@Nullable Consumer<TNet> onNetworkCreated) {
+        mayBeDisconnected = false;
         if (graph.nodes().isEmpty()) {
             return;
         }
@@ -404,8 +424,12 @@ public abstract class Network<TNet extends Network<TNet, TNode>, TNode extends I
         // Because the underlying graph is set to be "stable", the order of this list
         // should be constant.
         var nodes = createNodeList();
+        var indices = new Object2IntOpenHashMap<TNode>(nodes.size());
+        for (int i = 0; i < nodes.size(); i++) {
+            indices.put(nodes.get(i), i);
+        }
         return new IndexedEdgeList(
-                edges().map(pair -> Pair.of(nodes.indexOf(pair.getFirst()), nodes.indexOf(pair.getSecond()))).toList());
+                edges().map(pair -> Pair.of(indices.getInt(pair.getFirst()), indices.getInt(pair.getSecond()))).toList());
     }
 
     // Wrapper to get around type erasure issue in the constructors.

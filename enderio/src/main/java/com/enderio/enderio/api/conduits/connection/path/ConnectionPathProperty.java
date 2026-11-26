@@ -1,10 +1,10 @@
 package com.enderio.enderio.api.conduits.connection.path;
 
 import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BinaryOperator;
 import java.util.function.Function;
 
 /**
@@ -30,10 +30,25 @@ public class ConnectionPathProperty<T> {
         return aggregator.apply(values).orElse(defaultValue);
     }
 
+    /** Built-in properties for which reducing a prefix produces the same result as reducing the whole path. */
+    @ApiStatus.Internal
+    public static final class Reducible<T> extends ConnectionPathProperty<T> {
+        private final BinaryOperator<T> operator;
+
+        Reducible(BinaryOperator<T> operator, T defaultValue) {
+            super(values -> values.stream().reduce(operator), defaultValue);
+            this.operator = operator;
+        }
+
+        public T append(T prefix, T value) {
+            return operator.apply(prefix, value);
+        }
+    }
+
     // region Integer Helpers
 
     public static ConnectionPathProperty<Integer> minInt(int defaultValue) {
-        return new ConnectionPathProperty<>(values -> values.stream().min(Integer::compare), defaultValue);
+        return new Reducible<>(BinaryOperator.minBy(Integer::compare), defaultValue);
     }
 
     public static ConnectionPathProperty<Integer> maxInt(int defaultValue) {
@@ -65,7 +80,7 @@ public class ConnectionPathProperty<T> {
     // region Long Helpers
 
     public static ConnectionPathProperty<Long> minLong(long defaultValue) {
-        return new ConnectionPathProperty<>(values -> values.stream().min(Long::compare), defaultValue);
+        return new Reducible<>(BinaryOperator.minBy(Long::compare), defaultValue);
     }
 
     public static ConnectionPathProperty<Long> maxLong(long defaultValue) {

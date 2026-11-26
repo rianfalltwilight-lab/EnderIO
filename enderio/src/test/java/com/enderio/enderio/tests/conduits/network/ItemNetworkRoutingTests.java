@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -154,6 +155,66 @@ class ItemNetworkRoutingTests {
         assertEquals(2, target.count());
     }
 
+    @Test
+    void aShortcutUpdatesExistingPathsWhenAddedAndRemoved() {
+        var source = endpoint(0, EXTRACT);
+        var innerA = endpoint(1, INSERT.withIsInsert(false));
+        var innerB = endpoint(2, INSERT.withIsInsert(false));
+        var target = endpoint(3, INSERT);
+        var network = source.node.getNetwork();
+        network.connect(source.node, innerA.node);
+        network.connect(innerA.node, innerB.node);
+        network.connect(innerB.node, target.node);
+        var from = new ConduitBlockConnection(source.node, FACE);
+        network.ensureCachesReady();
+        assertEquals(4, network.insertConnectionsFrom(from).getFirst().length());
+
+        network.connect(source.node, target.node);
+        network.ensureCachesReady();
+        assertEquals(2, network.insertConnectionsFrom(from).getFirst().length());
+        network.disconnect(source.node, target.node);
+        network.ensureCachesReady();
+        assertEquals(4, network.insertConnectionsFrom(from).getFirst().length());
+    }
+
+    @Test
+    void aPlainSegmentJoinsTheExistingNetworkWithoutReplacingItsRoutes() {
+        var source = endpoint(0, EXTRACT);
+        var target = endpoint(1, INSERT);
+        var network = source.node.getNetwork();
+        network.connect(source.node, target.node);
+        network.ensureCachesReady();
+        var from = new ConduitBlockConnection(source.node, FACE);
+        var route = network.insertConnectionsFrom(from).getFirst();
+
+        var leaf = endpoint(2, INSERT);
+        leaf.attachment.setConnectionStatus(item, FACE, ConnectionStatus.DISCONNECTED);
+        var originalLeafNetwork = leaf.node.getNetwork();
+        ConduitNetworkImpl.connectAdjacentNodes(leaf.node, target.node, discarded -> assertSame(originalLeafNetwork, discarded));
+        assertTrue(originalLeafNetwork.isDiscarded());
+        assertSame(network, leaf.node.getNetwork());
+        network.ensureCachesReady();
+        assertSame(route, network.insertConnectionsFrom(from).getFirst());
+        network.remove(leaf.node);
+        network.ensureCachesReady();
+        assertSame(route, network.insertConnectionsFrom(from).getFirst());
+    }
+
+    @Test
+    void selfFeedingEndpointHasOnePathAndIsExcludedFromItsAccessiblePeers() {
+        var endpoint = endpoint(0, EXTRACT.withIsInsert(true).withIsSelfFeed(true));
+        var connection = new ConduitBlockConnection(endpoint.node, FACE);
+        var network = endpoint.node.getNetwork();
+        network.ensureCachesReady();
+        assertTrue(network.blockConnectionsAccessibleFrom(connection).isEmpty());
+        var paths = network.insertConnectionsFrom(connection);
+        assertEquals(1, paths.size());
+        assertEquals(connection, paths.getFirst().start());
+        assertEquals(connection, paths.getFirst().end());
+        assertEquals(1, paths.getFirst().length());
+        assertEquals(paths, network.extractConnectionsFrom(connection));
+    }
+
     private static final class CountingNetwork extends ConduitNetworkImpl {
         int visited;
 
@@ -170,26 +231,40 @@ class ItemNetworkRoutingTests {
 
     @Test
     void measureEndpointChainCacheRebuild() {
-        measureChain(6); // Warm up the graph and attachment code before the reported sizes.
+        if ("true".equalsIgnoreCase(System.getenv("ENDERIO_ROUTING_BENCH"))) {
+            for (int round = 1; round <= 8; round++) {
+                measureChain(32, "warmup", round);
+            }
+            for (int round = 1; round <= 8; round++) {
+                measureChain(32, "sample", round);
+            }
+            return;
+        }
+        measureChain(6, "warmup", 1);
         for (int size : List.of(12, 32)) {
-            measureChain(size);
-            measureChain(size);
+            measureChain(size, "smoke", 1);
+            measureChain(size, "smoke", 2);
         }
     }
 
-    private void measureChain(int size) {
+    private void measureChain(int size, String phase, int round) {
         var first = endpoint(0, INSERT);
+        var endpoints = new ArrayList<Endpoint>(size);
+        endpoints.add(first);
         first.node.getNetwork().remove(first.node);
         var network = new CountingNetwork(first.node);
         var last = first;
         for (int x = 1; x < size; x++) {
             var next = endpoint(x, INSERT);
+            endpoints.add(next);
             network.connect(last.node, next.node);
             last = next;
         }
+        int readsBefore = endpoints.stream().mapToInt(endpoint -> endpoint.attachment.configReads()).sum();
         long start = System.nanoTime();
         network.ensureCachesReady();
         long elapsed = System.nanoTime() - start;
+        int configReads = endpoints.stream().mapToInt(endpoint -> endpoint.attachment.configReads()).sum() - readsBefore;
 
         assertEquals(size, network.blockConnections().size());
         int pairs = 0;
@@ -207,7 +282,7 @@ class ItemNetworkRoutingTests {
         assertEquals(size * (size - 1), pairs);
         assertEquals(size * (size * size - 1) / 3 + pairs, lengths);
         assertTrue(network.visited > 0);
-        System.out.printf("chain rebuild: nodes=%d pairs=%d lengthSum=%d neighborQueries=%d elapsedNs=%d%n",
-            size, pairs, lengths, network.visited, elapsed);
+        System.out.printf("chain rebuild: phase=%s round=%d nodes=%d pairs=%d lengthSum=%d neighborQueries=%d configReads=%d elapsedNs=%d%n",
+            phase, round, size, pairs, lengths, network.visited, configReads, elapsed);
     }
 }

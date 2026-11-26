@@ -74,6 +74,7 @@ public final class ConduitConnectionPath {
 
     @Override
     public int hashCode() {
-        return Objects.hash(start, end, length, properties);
+        // Endpoint pairs distinguish routes without hashing addon-defined path properties on every packet.
+        return 31 * (31 * Objects.hashCode(start) + Objects.hashCode(end)) + length;
     }
 }

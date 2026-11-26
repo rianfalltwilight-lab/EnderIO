@@ -1,5 +1,6 @@
 package com.enderio.enderio.tests.conduits;
 
+import com.enderio.core.common.network.NetworkDataSlot;
 import com.enderio.enderio.api.EnderIORegistries;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConnectionStatus;
@@ -23,6 +24,7 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.storage.DimensionDataStorage;
 import net.minecraft.world.phys.BlockHitResult;
@@ -36,9 +38,14 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(EphemeralTestServerProvider.class)
@@ -200,4 +207,104 @@ public class ConduitBundleLoadTests {
             Assertions.assertNotEquals(opposite, shape.getTotalShape().closestPointTo(opposite).orElseThrow());
         }
     }
+
+    @Test
+    void repeatedLoadsRestartTheTwoTickConnectionDelay(MinecraftServer server) {
+        var level = serverLevel(server);
+        var pos = new BlockPos(7, 80, 7);
+        var bundle = spy(new ConduitBundleBlockEntity(pos, EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState()));
+        bundle.setLevel(level);
+        var tag = new CompoundTag();
+        bundle.loadWithComponents(tag, server.registryAccess());
+        bundle.serverTick();
+        bundle.loadWithComponents(tag, server.registryAccess());
+        bundle.serverTick();
+        verify(bundle, never()).updateConnections(level, pos, null, false);
+
+        bundle.serverTick();
+        bundle.serverTick();
+        verify(bundle).updateConnections(level, pos, null, false);
+    }
+
+    @Test
+    void dirtySyncIsCoalescedAndDoesNotReachTheReplacementBundle(MinecraftServer server) {
+        var level = serverLevel(server);
+        var pos = new BlockPos(5, 80, 5);
+        var state = EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState();
+        var old = new ConduitBundleBlockEntity(pos, state);
+        old.setLevel(level);
+        old.markNodesDirty();
+        old.markNodesDirty();
+        old.serverTick();
+        old.serverTick();
+        verify(level).sendBlockUpdated(pos, state, state, Block.UPDATE_ALL);
+
+        old.markNodesDirty();
+        old.onChunkUnloaded();
+        old.setRemoved();
+        var replacement = new ConduitBundleBlockEntity(pos, state);
+        replacement.setLevel(level);
+        var ticker = state.getTicker(level, replacement.getType());
+        Assertions.assertNotNull(ticker);
+        replacement.serverTick();
+        verify(level, times(1)).sendBlockUpdated(pos, state, state, Block.UPDATE_ALL);
+    }
+
+    @Test
+    void aDisconnectedSideWithFilterInventorySurvivesSparseSerialization(MinecraftServer server) {
+        var item = itemConduit(server);
+        var source = savedBundle(server, item);
+        source.getList("Connections", Tag.TAG_LIST).getList(0).getCompound(0)
+            .putString("Status", ConnectionStatus.DISCONNECTED.getSerializedName());
+        var state = EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState();
+        var original = new ConduitBundleBlockEntity(BlockPos.ZERO, state);
+        original.loadWithComponents(source, server.registryAccess());
+        var saved = original.getUpdateTag(server.registryAccess());
+        Assertions.assertEquals(1, saved.getList("Connections", Tag.TAG_LIST).getList(0).size());
+
+        var copy = new ConduitBundleBlockEntity(BlockPos.ZERO, state);
+        copy.loadWithComponents(saved, server.registryAccess());
+        Assertions.assertEquals(ConnectionStatus.DISCONNECTED, copy.getConnectionStatus(item, Direction.NORTH));
+        Assertions.assertTrue(copy.getConnectionInventory(item, Direction.NORTH).getStackInSlot(0).is(EIOItems.BASIC_ITEM_FILTER.get()));
+        Assertions.assertEquals(ConnectionStatus.DISCONNECTED, copy.getConnectionStatus(item, Direction.SOUTH));
+    }
+
+    @Test
+    void dirtyDuringNotificationIsSentOnTheNextTick(MinecraftServer server) {
+        var level = serverLevel(server);
+        var pos = new BlockPos(8, 80, 8);
+        var state = EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState();
+        var bundle = new ConduitBundleBlockEntity(pos, state);
+        bundle.setLevel(level);
+        doAnswer(invocation -> {
+            bundle.markNodesDirty();
+            return null;
+        }).doNothing().when(level).sendBlockUpdated(pos, state, state, Block.UPDATE_ALL);
+        bundle.markNodesDirty();
+        bundle.serverTick();
+        bundle.serverTick();
+        bundle.serverTick();
+        verify(level, times(2)).sendBlockUpdated(pos, state, state, Block.UPDATE_ALL);
+    }
+
+    @Test
+    void idleServerTickerPreservesTheFiveTickSlotPhase(MinecraftServer server) {
+        var level = serverLevel(server);
+        var pos = new BlockPos(8, 80, 8);
+        var state = EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState();
+        var bundle = new ConduitBundleBlockEntity(pos, state);
+        bundle.setLevel(level);
+        bundle.serverTick();
+        var slot = mock(NetworkDataSlot.class);
+        bundle.addDataSlot(slot);
+        for (int i = 0; i < 4; i++) {
+            bundle.serverTick();
+        }
+        verify(slot, never()).doesNeedUpdate();
+        bundle.serverTick();
+        verify(slot).doesNeedUpdate();
+        when(level.isClientSide()).thenReturn(true);
+        Assertions.assertNull(state.getTicker(level, bundle.getType()));
+    }
+
 }

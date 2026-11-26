@@ -2,7 +2,7 @@ package com.enderio.enderio.content.filters.item.existing;
 
 import com.enderio.core.common.serialization.OrderedListCodec;
 import com.enderio.core.common.util.EqualityUtil;
-import com.enderio.enderio.api.filter.ItemFilter;
+import com.enderio.enderio.content.filters.item.NonMutatingItemFilter;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.NonNullList;
@@ -19,7 +19,7 @@ import java.util.Objects;
 
 // This is just an example as to why we needed a more extensive filter interface :)
 public record ExistingItemFilter(boolean hasSnapshot, NonNullList<ItemStack> snapshot, boolean shouldCompareComponents,
-        boolean isInverted) implements ItemFilter, TooltipComponent {
+        boolean isInverted) implements NonMutatingItemFilter, TooltipComponent {
 
     public static final Codec<ExistingItemFilter> CODEC = RecordCodecBuilder
             .create(componentInstance -> componentInstance

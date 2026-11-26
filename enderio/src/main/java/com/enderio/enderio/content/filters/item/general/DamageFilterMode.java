@@ -12,7 +12,7 @@ import net.minecraft.util.StringRepresentable;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.Objects;
-import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.IntFunction;
 
 public enum DamageFilterMode implements StringRepresentable {
@@ -38,16 +38,16 @@ public enum DamageFilterMode implements StringRepresentable {
     private final int id;
     private final String name;
 
-    private final Function<ItemStack, Boolean> predicate;
+    private final Predicate<ItemStack> predicate;
 
-    DamageFilterMode(int id, String name, Function<ItemStack, Boolean> predicate) {
+    DamageFilterMode(int id, String name, Predicate<ItemStack> predicate) {
         this.id = id;
         this.name = name;
         this.predicate = predicate;
     }
 
     public boolean test(ItemStack stack) {
-        return predicate.apply(stack);
+        return predicate.test(stack);
     }
 
     @Override

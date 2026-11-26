@@ -2,12 +2,12 @@ package com.enderio.enderio.content.conduits.type.energy;
 
 import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
 import com.enderio.enderio.api.conduits.network.node.ConduitNode;
+import com.enderio.enderio.content.conduits.network.ConduitNodeImpl;
 import com.enderio.enderio.init.EIOConduitTypes;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.energy.IEnergyStorage;
-import org.jetbrains.annotations.Nullable;
 
 public record EnergyConduitStorage(Direction side, ConduitNode node) implements IEnergyStorage {
     @Override
@@ -21,7 +21,8 @@ public record EnergyConduitStorage(Direction side, ConduitNode node) implements 
         }
 
         var network = node.getNetwork();
-        var inserts = network.insertConnectionsFrom(new ConduitBlockConnection(node, side));
+        var connection = node instanceof ConduitNodeImpl impl ? impl.energyPort(side).connection() : new ConduitBlockConnection(node, side);
+        var inserts = network.insertConnectionsFrom(connection);
 
         int energyToSend = Math.min(amount, getTransferRate());
         int energyAccepted = 0;

@@ -13,6 +13,10 @@ import com.google.common.collect.Multimap;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.logging.LogUtils;
 import com.mojang.serialization.Codec;
+import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.CrashReport;
 import net.minecraft.ReportedException;
 import net.minecraft.core.BlockPos;
@@ -35,10 +39,12 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 @EventBusSubscriber
 public class ConduitNetworkSavedData extends SavedData {
@@ -48,19 +54,18 @@ public class ConduitNetworkSavedData extends SavedData {
 
     private final Multimap<ConduitType<?, ?>, ConduitNetworkImpl> networks = HashMultimap.create();
 
-    private final Multimap<Long, ConduitNetworkImpl> networksByChunk = HashMultimap.create();
-    private final Multimap<ConduitNetworkImpl, Long> chunksByNetwork = HashMultimap.create();
-
-    private final Map<Long, Boolean> tickingChunksMap = Maps.newHashMap();
+    private final Long2ObjectOpenHashMap<Set<ConduitNetworkImpl>> networksByChunk = new Long2ObjectOpenHashMap<>();
+    private final Map<ConduitNetworkImpl, LongSet> chunksByNetwork = Maps.newHashMap();
+    // 0 = unknown, 1 = not ticking, 2 = ticking.
+    private final Long2ByteOpenHashMap tickingChunksMap = new Long2ByteOpenHashMap();
 
     private final Map<ConduitType<?, ?>, Map<BlockPos, ConduitNodeImpl>> unloadedNodes = Maps.newHashMap();
 
     private static final String KEY_NEW_DATA = "Networks";
+    private static final Factory<ConduitNetworkSavedData> FACTORY = new Factory<>(ConduitNetworkSavedData::new, ConduitNetworkSavedData::load);
 
     public static ConduitNetworkSavedData get(ServerLevel level) {
-        return level.getDataStorage()
-                .computeIfAbsent(new Factory<>(ConduitNetworkSavedData::new, ConduitNetworkSavedData::load),
-                        "enderio_conduit_network");
+        return level.getDataStorage().computeIfAbsent(FACTORY, "enderio_conduit_network");
     }
 
     public ConduitNetworkSavedData() {
@@ -79,7 +84,8 @@ public class ConduitNetworkSavedData extends SavedData {
                 continue;
             }
 
-            network.setOnChunkCoverageChanged(this::onNetworkChunksChanged);
+            network.setChunkTrackingListeners(this::onNetworkChunksChanged, this::onNetworkChunkChanged);
+            network.acknowledgeSave();
             this.networks.put(network.conduitType(), network);
 
             for (var node : network.nodes()) {
@@ -91,7 +97,9 @@ public class ConduitNetworkSavedData extends SavedData {
     private static ConduitNetworkSavedData load(CompoundTag nbt, HolderLookup.Provider lookupProvider) {
         // TODO: 1.22 - remove support for the legacy graph format.
         if (nbt.contains(KEY_GRAPHS)) {
-            return loadLegacy(nbt, lookupProvider);
+            var migrated = loadLegacy(nbt, lookupProvider);
+            migrated.setDirty();
+            return migrated;
         }
 
         var result = CODEC.parse(lookupProvider.createSerializationContext(NbtOps.INSTANCE), nbt.get(KEY_NEW_DATA));
@@ -145,7 +153,8 @@ public class ConduitNetworkSavedData extends SavedData {
         Preconditions.checkArgument(network.isValid(), "New network is not valid!");
         networks.put(network.conduitType(), network);
         onNetworkChunksChanged(network);
-        network.setOnChunkCoverageChanged(this::onNetworkChunksChanged);
+        network.setChunkTrackingListeners(this::onNetworkChunksChanged, this::onNetworkChunkChanged);
+        setDirty();
     }
 
     public static void onNetworkDiscarded(ServerLevel level, ConduitNetworkImpl network) {
@@ -157,39 +166,81 @@ public class ConduitNetworkSavedData extends SavedData {
         // Allow empty or discarded networks here
         networks.remove(network.conduitType(), network);
 
-        for (var chunk : network.allChunks()) {
-            networksByChunk.remove(chunk, network);
-            chunksByNetwork.remove(network, chunk);
+        stopTracking(network);
+    }
+
+    private void stopTracking(ConduitNetworkImpl network) {
+        var oldChunks = chunksByNetwork.remove(network);
+        if (oldChunks != null) {
+            oldChunks.forEach((long chunk) -> removeFromChunk(network, chunk));
+        }
+        network.setChunkTrackingListeners(null, null);
+        setDirty();
+    }
+
+    private void removeFromChunk(ConduitNetworkImpl network, long chunk) {
+        var covering = networksByChunk.get(chunk);
+        if (covering != null && covering.remove(network) && covering.isEmpty()) {
+            networksByChunk.remove(chunk);
+            tickingChunksMap.remove(chunk);
+        }
+    }
+
+    private void onNetworkChunkChanged(ConduitNetworkImpl network, long chunk) {
+        if (network.allChunks().contains(chunk)) {
+            chunksByNetwork.computeIfAbsent(network, ignored -> new LongOpenHashSet()).add(chunk);
+            networksByChunk.computeIfAbsent(chunk, ignored -> new HashSet<>()).add(network);
+        } else {
+            var known = chunksByNetwork.get(network);
+            if (known != null) {
+                known.remove(chunk);
+            }
+            removeFromChunk(network, chunk);
         }
     }
 
     private void onNetworkChunksChanged(ConduitNetworkImpl network) {
-        var knownChunks = chunksByNetwork.get(network);
-        var currentChunks = network.allChunks();
-
-        // Find removed chunks
-        var removedChunks = knownChunks.stream().filter(chunk -> !currentChunks.contains(chunk)).toList();
-
-        // Find added chunks
-        var addedChunks = currentChunks.stream().filter(chunk -> !knownChunks.contains(chunk)).toList();
-
-        // Update collections
-        for (var chunk : removedChunks) {
-            networksByChunk.remove(chunk, network);
+        var current = network.allChunks();
+        var known = chunksByNetwork.computeIfAbsent(network, ignored -> new LongOpenHashSet());
+        var previous = known.iterator();
+        while (previous.hasNext()) {
+            long chunk = previous.nextLong();
+            if (!current.contains(chunk)) {
+                previous.remove();
+                removeFromChunk(network, chunk);
+            }
         }
-
-        for (var chunk : addedChunks) {
-            networksByChunk.put(chunk, network);
+        for (long chunk : current) {
+            if (known.add(chunk)) {
+                networksByChunk.computeIfAbsent(chunk, ignored -> new HashSet<>()).add(network);
+            }
         }
-
-        chunksByNetwork.get(network).clear();
-        chunksByNetwork.get(network).addAll(currentChunks);
     }
 
     @Override
     public boolean isDirty() {
-        // Always save networks when the opportunity arises
-        return true;
+        if (super.isDirty()) {
+            return true;
+        }
+        // This check also runs on save/unload. Extension data without change notifications stays saveable.
+        for (var network : networks.values()) {
+            if (!network.isValid() || network.isEmpty() || network.hasUnsavedData()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public void setDirty(boolean dirty) {
+        super.setDirty(dirty);
+        if (!dirty) {
+            for (var network : networks.values()) {
+                if (network.isValid()) {
+                    network.acknowledgeSave();
+                }
+            }
+        }
     }
 
     @SubscribeEvent
@@ -200,20 +251,26 @@ public class ConduitNetworkSavedData extends SavedData {
     }
 
     private void tick(ServerLevel serverLevel) {
-        // Only remove empty graphs here
-        networks.values()
-                .stream()
-                .filter(n -> !n.isValid() || n.isEmpty())
-                .toList() // avoid CME
-                .forEach(this::onNetworkDiscarded);
+        var currentNetworks = networks.values().iterator();
+        while (currentNetworks.hasNext()) {
+            var network = currentNetworks.next();
+            if (!network.isValid() || network.isEmpty()) {
+                currentNetworks.remove();
+                stopTracking(network);
+            }
+        }
 
-        // Detect any chunk load or tick state changes
-        for (var chunkPos : networksByChunk.keySet()) {
-            // Checking #hasChunk to resolve GH-1177. Unsure why hasChunk changes without firing a chunk unload event.
-            boolean isTicking = serverLevel.hasChunk(ChunkPos.getX(chunkPos), ChunkPos.getZ(chunkPos)) && serverLevel.shouldTickBlocksAt(chunkPos);
-            if (!tickingChunksMap.containsKey(chunkPos) || isTicking != tickingChunksMap.get(chunkPos)) {
-                tickingChunksMap.put(chunkPos, isTicking);
-                networksByChunk.get(chunkPos).forEach(n -> n.onChunkTickStatusChanged(chunkPos));
+        for (var it = networksByChunk.long2ObjectEntrySet().fastIterator(); it.hasNext();) {
+            var entry = it.next();
+            long chunk = entry.getLongKey();
+            // hasChunk can change even without a chunk unload event (GH-1177).
+            boolean ticking = serverLevel.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk)) && serverLevel.shouldTickBlocksAt(chunk);
+            byte status = (byte) (ticking ? 2 : 1);
+            if (tickingChunksMap.get(chunk) != status) {
+                tickingChunksMap.put(chunk, status);
+                for (var network : entry.getValue()) {
+                    network.onChunkTickStatusChanged(chunk);
+                }
             }
         }
 
@@ -344,7 +401,7 @@ public class ConduitNetworkSavedData extends SavedData {
             }
 
             // Hook onto chunk coverage change event
-            network.setOnChunkCoverageChanged(savedData::onNetworkChunksChanged);
+            network.setChunkTrackingListeners(savedData::onNetworkChunksChanged, savedData::onNetworkChunkChanged);
 
             savedData.networks.put(network.conduitType(), network);
 

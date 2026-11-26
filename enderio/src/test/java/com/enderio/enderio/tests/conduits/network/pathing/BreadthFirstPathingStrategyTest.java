@@ -4,6 +4,7 @@ import com.enderio.enderio.api.EnderIORegistries;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
 import com.enderio.enderio.api.conduits.connection.path.ConnectionPathProperty;
+import com.enderio.enderio.api.conduits.connection.path.SpeedAndTickRatePair;
 import com.enderio.enderio.content.conduits.network.pathing.BreadthFirstPathingStrategy;
 import com.enderio.enderio.init.EIOConduits;
 import net.minecraft.core.Direction;
@@ -346,5 +347,24 @@ public class BreadthFirstPathingStrategyTest {
         Assertions.assertEquals("a/" + firstBranch + "/d", forward.property(property));
         Assertions.assertEquals(forward.property(property), forward.reverse().property(property));
         Assertions.assertEquals("d/" + returnBranch + "/a", back.property(property));
+    }
+
+    @Test
+    void equalAdjustedRatesKeepTheFirstPairOnThePath() {
+        var property = SpeedAndTickRatePair.minProperty(SpeedAndTickRatePair.ZERO);
+        var context = new FakePathfindingContext();
+        var a = context.createNode("a", testConduit);
+        var b = context.createNode("b", testConduit);
+        var c = context.createNode("c", testConduit);
+        var first = new SpeedAndTickRatePair(4, 10);
+        var last = new SpeedAndTickRatePair(8, 20);
+        a.setPathProperty(property, first);
+        c.setPathProperty(property, last);
+        context.addEdge(a, b);
+        context.addEdge(b, c);
+        var from = new ConduitBlockConnection(a, Direction.NORTH);
+        var to = new ConduitBlockConnection(c, Direction.SOUTH);
+        Assertions.assertSame(first, pathfinder.findPath(from, to, context).orElseThrow().property(property));
+        Assertions.assertSame(last, pathfinder.findPath(to, from, context).orElseThrow().property(property));
     }
 }

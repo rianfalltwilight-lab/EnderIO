@@ -25,6 +25,7 @@ public final class ItemConduitNodeData implements NodeData {
     public static final NodeDataType<ItemConduitNodeData> TYPE = new NodeDataType<>(ItemConduitNodeData.CODEC,
             ItemConduitNodeData::new);
     private final Map<Direction, Integer> roundRobinIndexes;
+    private long revision;
 
     public ItemConduitNodeData() {
         this(Map.of());
@@ -44,7 +45,14 @@ public final class ItemConduitNodeData implements NodeData {
     }
 
     public void setIndex(Direction side, int index) {
-        roundRobinIndexes.put(side, index);
+        var previous = roundRobinIndexes.put(side, index);
+        if (previous == null || previous != index) {
+            revision++;
+        }
+    }
+
+    public long revision() {
+        return revision;
     }
 
     @Override

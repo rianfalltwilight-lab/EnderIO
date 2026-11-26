@@ -33,6 +33,7 @@ public class FakeConduitNodeAttachment implements IConduitNodeAttachment {
     private final Map<Direction, IItemHandler> neighborItems = new HashMap<>();
     @Nullable
     private DyeColor poweredChannel;
+    private int configReads;
 
     FakeConduitNodeAttachment(@Nullable Level level, Holder<Conduit<?, ?>> conduit) {
         this.level = level;
@@ -100,7 +101,12 @@ public class FakeConduitNodeAttachment implements IConduitNodeAttachment {
             throw new IllegalArgumentException("Conduit type not supported by this fake attachment");
         }
 
+        configReads++;
         return connectionConfigs.computeIfAbsent(side, s -> conduit.value().type().connectionConfigType().getDefault());
+    }
+
+    int configReads() {
+        return configReads;
     }
 
     @Override

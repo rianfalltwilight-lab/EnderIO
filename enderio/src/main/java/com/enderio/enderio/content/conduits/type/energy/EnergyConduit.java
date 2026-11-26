@@ -12,6 +12,7 @@ import com.enderio.enderio.api.conduits.network.node.ConduitNode;
 import com.enderio.enderio.api.io.RedstoneControl;
 import com.enderio.enderio.config.conduits.ConduitsConfig;
 import com.enderio.enderio.content.conduits.ConduitLang;
+import com.enderio.enderio.content.conduits.network.ConduitNodeImpl;
 import com.enderio.enderio.init.EIOConduitTypes;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
@@ -101,7 +102,7 @@ public record EnergyConduit(ResourceLocation texture, Component description, int
                 // If this conduit can be pushed into, provide the full cap
                 var config = connectionReader.getConnectionConfig(side, EnergyConduitConnectionConfig.TYPE);
                 if (config.isExtract()) {
-                    return (TCapability) new EnergyConduitStorage(side, node);
+                    return (TCapability) (node instanceof ConduitNodeImpl impl ? impl.energyPort(side).storage() : new EnergyConduitStorage(side, node));
                 }
             }
 
