@@ -311,7 +311,7 @@ public class AlloySmelterBlockEntity extends PoweredMachineBlockEntity {
                 RecipeType<AlloySmeltingRecipe> recipeType,
                 CraftingMachineTaskFactory<AlloySmeltingMachineTask, AlloySmeltingRecipe, AlloySmeltingRecipe.Input> taskFactory,
                 Supplier<AlloySmeltingRecipe.Input> recipeInputSupplier) {
-            super(blockEntity, canAcceptNewTask, recipeType, taskFactory, recipeInputSupplier);
+            super(blockEntity, canAcceptNewTask, recipeType, taskFactory, recipeInputSupplier, ProgressSync.MENU);
         }
 
         @Override

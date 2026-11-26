@@ -181,13 +181,15 @@ public abstract class LegacyPoweredMachineBlockEntity extends LegacyMachineBlock
      * Push energy out to neighboring blocks.
      */
     private void pushEnergy() {
-        // Don't bother if our energy storage cannot output ever.
-        if (!getExposedEnergyStorage().getIOMode().canOutput()) {
+        var storage = getExposedEnergyStorage();
+        var ioMode = storage.getIOMode();
+        if (!ioMode.canOutput()) {
             return;
         }
 
-        EnergyIOMode energyIOMode = getExposedEnergyStorage().getIOMode();
-        TransferUtil.distributeEnergyEvenly(level, worldPosition, dir -> energyIOMode.canPush(getIOMode(dir)) && shouldPushEnergyTo(dir));
+        TransferUtil.distributeEnergyEvenly(storage, dir -> ioMode.canPush(getIOMode(dir)) && shouldPushEnergyTo(dir),
+            dir -> getSelfCapability(Capabilities.EnergyStorage.BLOCK, dir),
+            dir -> getNeighbouringCapability(Capabilities.EnergyStorage.BLOCK, dir));
     }
 
     /**

@@ -26,6 +26,7 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.player.Inventory;
@@ -66,7 +67,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
 
     private final CapacitorTier tier;
     private CapacitorBankNode node;
-    private CapacitorBankNetwork oldNetwork;
+    private int energyForDrop;
     private int legacyEnergy = 0;
     private UUID uuid = UUID.randomUUID();
 
@@ -107,6 +108,10 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         return node.getNetwork();
     }
 
+    boolean belongsTo(CapacitorBankNetwork network) {
+        return node != null && node.isValid() && node.getNetwork() == network;
+    }
+
     @Override
     public void setLevel(Level level) {
         super.setLevel(level);
@@ -131,10 +136,19 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         }
     }
 
+    @Override
+    public void onChunkUnloaded() {
+        if (node != null) {
+            node.detach(this);
+        }
+        super.onChunkUnloaded();
+    }
+
     public void removeNode() {
-        if (this.node.isValid()) {
-            this.oldNetwork = node.getNetwork(); //Network is still needed for the picked up block
-            this.node.getNetwork().remove(this.node);
+        if (node != null && node.isValid()) {
+            var network = node.getNetwork();
+            energyForDrop = network.takeEnergyForRemoval(node);
+            network.remove(node);
         }
     }
 
@@ -157,7 +171,14 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         super.neighborChanged(neighborBlock, neighborPos);
 
         if (!level.isClientSide()) {
-            isValidPushTargetCacheDirty = true;
+            invalidatePushTargets();
+        }
+    }
+
+    private void invalidatePushTargets() {
+        isValidPushTargetCacheDirty = true;
+        if (node != null && node.isValid()) {
+            node.getNetwork().targetsChanged();
         }
     }
 
@@ -179,7 +200,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
                     getBlockPos().relative(side),
                     side.getOpposite(),
                     () -> !isRemoved(),
-                    () -> isValidPushTargetCacheDirty = true));
+                    this::invalidatePushTargets));
 
                 var energyStorage = cache.getCapability();
                 if (energyStorage != null && !(energyStorage instanceof CapacitorBankEnergyStorage) && energyStorage.canReceive() &&
@@ -225,7 +246,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         // Invalidate caps
         level.invalidateCapabilities(worldPosition);
         level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_ALL);
-        isValidPushTargetCacheDirty = true;
+        invalidatePushTargets();
     }
 
     @Override
@@ -381,6 +402,9 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
 
     @Override
     public @Nullable AbstractContainerMenu createMenu(int i, Inventory inventory, Player player) {
+        if (player instanceof ServerPlayer serverPlayer) {
+            getNetwork().syncBeforeOpeningMenu(serverPlayer);
+        }
         return new CapacitorBankMenu(i, inventory, this);
     }
 
@@ -494,11 +518,10 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
             components.set(EIODataComponents.IO_CONFIG, ioConfig);
         }
 
-        if (oldNetwork != null) { //Network already kicked out the node, so we keep an old ref
-            int energy = oldNetwork.getEnergyForNode(this.tier());
-            if (energy != 0) {
-                components.set(EIODataComponents.ENERGY, energy);
-            }
+        // Level.destroyBlock collects loot before removing the block; player mining collects it afterwards.
+        int energy = node != null && node.isValid() ? node.getNetwork().energyForRemoval(node) : energyForDrop;
+        if (energy != 0) {
+            components.set(EIODataComponents.ENERGY, energy);
         }
     }
 

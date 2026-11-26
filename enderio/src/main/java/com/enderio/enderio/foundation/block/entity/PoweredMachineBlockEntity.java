@@ -28,6 +28,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.fml.LogicalSide;
+import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.ICapabilityProvider;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 
@@ -140,7 +141,9 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
         super.distributeResources();
 
         if (energyIOMode.canOutput()) {
-            TransferUtil.distributeEnergyEvenly(level, worldPosition, dir -> energyIOMode.canPush(getIOMode(dir)));
+            TransferUtil.distributeEnergyEvenly(energyStorage, dir -> energyIOMode.canPush(getIOMode(dir)),
+                dir -> getSelfCapability(Capabilities.EnergyStorage.BLOCK, dir),
+                dir -> getNeighbouringCapability(Capabilities.EnergyStorage.BLOCK, dir));
         }
     }
 

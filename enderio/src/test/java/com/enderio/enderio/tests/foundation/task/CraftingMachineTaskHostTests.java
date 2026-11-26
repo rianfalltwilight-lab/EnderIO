@@ -54,6 +54,7 @@ class CraftingMachineTaskHostTests {
         when(block.getLevel()).thenReturn(level);
         var powered = new AtomicBoolean(false);
         var host = new Host(block, powered);
+        verify(block).addDataSlot(any());
         var recipe = new RecipeHolder<>(ResourceLocation.withDefaultNamespace("first"), mock(SagMillingRecipe.class));
         host.available = recipe;
         host.newTaskAvailable();

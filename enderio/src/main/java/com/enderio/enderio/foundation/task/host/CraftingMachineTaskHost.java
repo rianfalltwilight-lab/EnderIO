@@ -32,7 +32,13 @@ public class CraftingMachineTaskHost<R extends MachineRecipe<T>, T extends Recip
     public CraftingMachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask,
             RecipeType<R> recipeType, CraftingMachineTaskFactory<? extends CraftingMachineTask<R, T>, R, T> taskFactory,
             Supplier<T> recipeInputSupplier) {
-        super(blockEntity, canAcceptNewTask);
+        this(blockEntity, canAcceptNewTask, recipeType, taskFactory, recipeInputSupplier, ProgressSync.TRACKING_CHUNK);
+    }
+
+    public CraftingMachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask,
+            RecipeType<R> recipeType, CraftingMachineTaskFactory<? extends CraftingMachineTask<R, T>, R, T> taskFactory,
+            Supplier<T> recipeInputSupplier, ProgressSync progressSync) {
+        super(blockEntity, canAcceptNewTask, progressSync);
         this.recipeType = recipeType;
         this.taskFactory = taskFactory;
         this.recipeInputSupplier = recipeInputSupplier;

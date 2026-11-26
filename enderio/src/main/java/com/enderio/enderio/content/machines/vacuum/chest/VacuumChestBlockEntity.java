@@ -4,6 +4,7 @@ import com.enderio.enderio.api.EnderIOCapabilities;
 import com.enderio.enderio.api.filter.ItemFilterContext;
 import com.enderio.enderio.api.filter.ItemFilterDirection;
 import com.enderio.enderio.config.machines.MachinesConfig;
+import com.enderio.enderio.content.filters.item.NonMutatingItemFilter;
 import com.enderio.enderio.content.machines.vacuum.VacuumMachineBlockEntity;
 import com.enderio.enderio.foundation.inventory.MachineInventoryLayout;
 import com.enderio.enderio.foundation.inventory.MachineInventoryLayout.Builder;
@@ -41,27 +42,28 @@ public class VacuumChestBlockEntity extends VacuumMachineBlockEntity<ItemEntity>
 
     @Override
     public void handleEntity(ItemEntity entity) {
-        for (int i = 0; i < this.getInventory().getSlots(); i++) {
-            ItemStack itemToReceive = entity.getItem().copy();
-
-            // Enable the filter to adjust the amount to accept (limited item filter)
-            var filter = FILTER.getItemStack(this).getCapability(EnderIOCapabilities.ITEM_FILTER);
-            if (filter != null) {
-                itemToReceive = filter.test(itemToReceive, new ItemFilterContext(getInventory(), ItemFilterDirection.INSERT));
+        if (entity.level().isClientSide()) {
+            return;
+        }
+        var inventory = getInventory();
+        ItemStack original = entity.getItem();
+        ItemStack offered = original.copy();
+        var filter = FILTER.getItemStack(inventory).getCapability(EnderIOCapabilities.ITEM_FILTER);
+        if (filter != null) {
+            offered = filter.test(offered, new ItemFilterContext(inventory, ItemFilterDirection.INSERT));
+            if (offered.getCount() > original.getCount()) {
+                offered = offered.copyWithCount(original.getCount());
             }
-
-            // Abort if we can't accept the item.
-            if (itemToReceive.isEmpty()) {
-                return;
-            }
-
-            ItemStack remainder = this.getInventory().insertItem(i, itemToReceive, false);
-            if (remainder.isEmpty()) {
-                entity.discard();
-                return;
-            } else {
-                entity.getItem().setCount(remainder.getCount());
-            }
+        }
+        int allowed = offered.getCount();
+        for (int i = 0; i < inventory.getSlots() && !offered.isEmpty(); i++) {
+            offered = inventory.insertItem(i, offered, false);
+        }
+        int inserted = allowed - offered.getCount();
+        if (inserted == original.getCount()) {
+            entity.discard();
+        } else if (inserted > 0) {
+            entity.setItem(original.copyWithCount(original.getCount() - inserted));
         }
     }
 
@@ -74,7 +76,11 @@ public class VacuumChestBlockEntity extends VacuumMachineBlockEntity<ItemEntity>
     public Predicate<ItemEntity> getFilter() {
         var filter = FILTER.getItemStack(this).getCapability(EnderIOCapabilities.ITEM_FILTER);
         if (filter != null) {
-            return itemEntity -> !filter.test(itemEntity.getItem(), new ItemFilterContext(getInventory(), ItemFilterDirection.INSERT)).isEmpty();
+            var context = new ItemFilterContext(getInventory(), ItemFilterDirection.INSERT);
+            return itemEntity -> {
+                ItemStack stack = itemEntity.getItem();
+                return !filter.test(filter instanceof NonMutatingItemFilter ? stack : stack.copy(), context).isEmpty();
+            };
         }
 
         return super.getFilter();

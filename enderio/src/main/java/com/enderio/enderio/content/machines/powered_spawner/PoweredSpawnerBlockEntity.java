@@ -77,7 +77,7 @@ public class PoweredSpawnerBlockEntity extends PoweredMachineBlockEntity impleme
         super(EIOBlockEntities.POWERED_SPAWNER.get(), worldPosition, blockState, true, CapacitorSupport.REQUIRED,
                 EnergyIOMode.Input, CAPACITY, USAGE);
 
-        taskHost = new MachineTaskHost(this, this::hasEnergy) {
+        taskHost = new MachineTaskHost(this, this::hasEnergy, MachineTaskHost.ProgressSync.MENU) {
             @Override
             protected @Nullable MachineTask getNewTask() {
                 return createNewTask();

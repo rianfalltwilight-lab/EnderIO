@@ -59,7 +59,7 @@ public class PaintingMachineBlockEntity extends PoweredMachineBlockEntity {
         area = AABB.ofSize(worldPosition.getCenter(), 10, 10, 10);
 
         craftingTaskHost = new CraftingMachineTaskHost<>(this, this::hasEnergy, EIORecipes.PAINTING.type().get(),
-                this::createTask, this::createRecipeInput);
+                this::createTask, this::createRecipeInput, CraftingMachineTaskHost.ProgressSync.MENU);
     }
 
     @Nullable

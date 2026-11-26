@@ -70,7 +70,7 @@ public class VatBlockEntity extends MachineBlockEntity implements FluidTankUser,
         fluidHandler = createFluidHandler();
 
         craftingTaskHost = new CraftingMachineTaskHost<>(this, () -> true, EIORecipes.VAT_FERMENTING.type().get(),
-                this::createTask, this::createRecipeInput);
+                this::createTask, this::createRecipeInput, CraftingMachineTaskHost.ProgressSync.MENU);
     }
 
     @Nullable
@@ -84,7 +84,12 @@ public class VatBlockEntity extends MachineBlockEntity implements FluidTankUser,
         super.serverTick();
 
         if (canAct()) {
+            float previousProgress = craftingTaskHost.getProgress();
             craftingTaskHost.tick();
+            if (craftingTaskHost.getProgress() != previousProgress) {
+                // Fermentation advances without changing a tank, inventory, or energy storage.
+                level.blockEntityChanged(worldPosition);
+            }
         }
         updateMachineState(MachineState.ACTIVE, isActive());
     }

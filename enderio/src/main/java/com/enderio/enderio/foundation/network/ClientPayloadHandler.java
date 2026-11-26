@@ -5,6 +5,7 @@ import com.enderio.enderio.content.machines.capacitor_bank.CapacitorBankManager;
 import com.enderio.enderio.content.travel.TravelTargetSavedData;
 import com.enderio.enderio.foundation.network.packets.ClientBoundRemoveCapacitorBankPacket;
 import com.enderio.enderio.foundation.network.packets.ClientBoundSyncCapacitorBankPacket;
+import com.enderio.enderio.foundation.network.packets.ClientboundCapacitorBankValuesPacket;
 import com.enderio.enderio.foundation.network.packets.ClientboundSyncTravelDataPacket;
 import com.enderio.enderio.foundation.network.packets.ClientboundTravelTargetRemovedPacket;
 import com.enderio.enderio.foundation.network.packets.ClientboundTravelTargetUpdatedPacket;
@@ -36,6 +37,10 @@ public class ClientPayloadHandler {
             var level = context.player().level();
             TravelTargetApi.INSTANCE.removeAt(level, packet.pos());
         });
+    }
+
+    public void handleCapacitorBankValues(ClientboundCapacitorBankValuesPacket packet, IPayloadContext context) {
+        context.enqueueWork(() -> CapacitorBankManager.updateValues(packet));
     }
 
     public void handleSyncCapacitorBankPacket(ClientBoundSyncCapacitorBankPacket packet, IPayloadContext context) {

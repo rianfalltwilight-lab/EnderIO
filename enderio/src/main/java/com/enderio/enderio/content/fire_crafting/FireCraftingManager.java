@@ -40,7 +40,7 @@ public class FireCraftingManager {
     private final ConcurrentMap<BlockPos, Long> fireTracker = new ConcurrentHashMap<>();
 
     private WeakReference<RecipeManager> cachedRecipeManager = new WeakReference<>(null);
-    private static List<RecipeHolder<FireCraftingRecipe>> cachedRecipes = List.of();
+    private List<RecipeHolder<FireCraftingRecipe>> cachedRecipes = List.of();
 
     public FireCraftingManager() {
     }
@@ -168,7 +168,7 @@ public class FireCraftingManager {
 
             fireTracker.putIfAbsent(pos, gameTime + BaseConfig.COMMON.INFINITY.FIRE_MIN_AGE.get());
         } else {
-            if (level.getBlockState(pos).isAir() && gameTime > fireTracker.get(pos)) {
+            if (tickedBlockState.isAir() && gameTime > fireTracker.get(pos)) {
                 spawnInfinityDrops(level, pos, matchingRecipe);
             }
 
@@ -178,7 +178,7 @@ public class FireCraftingManager {
 
     private void onWorldTick(ServerLevel level) {
         // Only run if fire tick is disabled.
-        if (level.getGameRules().getBoolean(GameRules.RULE_DOFIRETICK)) {
+        if (fireTracker.isEmpty() || level.getGameRules().getBoolean(GameRules.RULE_DOFIRETICK)) {
             return;
         }
 
@@ -207,16 +207,22 @@ public class FireCraftingManager {
 
     @SubscribeEvent
     public static void onNeighborNotifyEvent(BlockEvent.NeighborNotifyEvent event) {
-        if (event.getLevel() instanceof ServerLevel level) {
-            var fireCraftingManager = level.getData(FireCraftingManager.ATTACHMENT_TYPE);
-            fireCraftingManager.onRandomTick(level, event.getPos());
+        if (!(event.getLevel() instanceof ServerLevel level)) {
+            return;
+        }
+        boolean fire = event.getState().is(BlockTags.FIRE);
+        if (fire || level.hasData(ATTACHMENT_TYPE)) {
+            var manager = level.getData(ATTACHMENT_TYPE);
+            if (fire || manager.fireTracker.containsKey(event.getPos())) {
+                manager.onRandomTick(level, event.getPos());
+            }
         }
     }
 
     // Support worlds where firetick is disabled
     @SubscribeEvent
     public static void onWorldTick(LevelTickEvent.Pre event) {
-        if (event.getLevel() instanceof ServerLevel level) {
+        if (event.getLevel() instanceof ServerLevel level && level.hasData(ATTACHMENT_TYPE)) {
             var fireCraftingManager = level.getData(FireCraftingManager.ATTACHMENT_TYPE);
             fireCraftingManager.onWorldTick(level);
         }

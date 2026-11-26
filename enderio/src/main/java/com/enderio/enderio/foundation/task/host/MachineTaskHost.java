@@ -13,6 +13,10 @@ import org.jetbrains.annotations.Nullable;
 import java.util.function.Supplier;
 
 public abstract class MachineTaskHost {
+    public enum ProgressSync {
+        TRACKING_CHUNK, MENU
+    }
+
     @Nullable
     private MachineTask currentTask;
 
@@ -35,11 +39,17 @@ public abstract class MachineTaskHost {
      * This should be constructed in the constructor of your block entity.
      */
     public MachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask) {
+        this(blockEntity, canAcceptNewTask, ProgressSync.TRACKING_CHUNK);
+    }
+
+    /** Machines using MENU supply the authoritative progress to their open menu and server-side HUD providers. */
+    public MachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask, ProgressSync progressSync) {
         levelSupplier = blockEntity::getLevel;
         this.canAcceptNewTask = canAcceptNewTask;
 
-        // Add sync data slot for crafting progress
-        blockEntity.addDataSlot(NetworkDataSlot.FLOAT.create(this::getProgress, p -> clientTaskProgress = p));
+        if (progressSync == ProgressSync.TRACKING_CHUNK) {
+            blockEntity.addDataSlot(NetworkDataSlot.FLOAT.create(this::getProgress, p -> clientTaskProgress = p));
+        }
     }
 
     @Nullable

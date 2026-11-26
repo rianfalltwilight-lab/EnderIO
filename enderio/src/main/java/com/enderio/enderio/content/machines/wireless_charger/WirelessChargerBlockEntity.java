@@ -38,7 +38,6 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -79,42 +78,61 @@ public class WirelessChargerBlockEntity extends PoweredMachineBlockEntity implem
         }
         int toDistribute = Math.min(energyStorage.getEnergyStored(), getMaxEnergyUse());
 
-        List<Player> players = level.getEntitiesOfClass(Player.class, bounds);
-        for (Player player : players) {
-            Inventory inventory = player.getInventory();
-            for (int i = 0; i < inventory.getContainerSize(); i++) {
-                ItemStack stack = inventory.getItem(i);
-                @Nullable
-                IEnergyStorage cap = stack.getCapability(Capabilities.EnergyStorage.ITEM);
-                if (cap != null && cap.canReceive()) {
-                    int received = cap.receiveEnergy(toDistribute, false);
-                    energyStorage.consumeEnergy(received);
-                    toDistribute -= received;
-                    if (toDistribute <= 0) {
-                        return;
+        Player onlyPlayer = null;
+        for (Player player : level.players()) {
+            if (player.isSpectator() || !bounds.intersects(player.getBoundingBox())) {
+                continue;
+            }
+            if (onlyPlayer != null) {
+                // Players competing for the same budget must retain vanilla's entity section order.
+                for (Player nearby : level.getEntitiesOfClass(Player.class, bounds)) {
+                    toDistribute = chargePlayer(nearby, energyStorage, toDistribute);
+                    if (toDistribute == 0) {
+                        break;
                     }
                 }
+                return;
             }
+            onlyPlayer = player;
+        }
+        if (onlyPlayer != null) {
+            chargePlayer(onlyPlayer, energyStorage, toDistribute);
+        }
+    }
 
-            var items = CuriosCompat.getActiveCurios(player, s -> true);
-            if (items.isPresent()) {
-                for (ItemStack stack : items.get()) {
-                    if (stack.isEmpty()) {
-                        continue;
-                    }
-                    @Nullable
-                    IEnergyStorage cap = stack.getCapability(Capabilities.EnergyStorage.ITEM);
-                    if (cap != null && cap.canReceive()) {
-                        int received = cap.receiveEnergy(toDistribute, false);
-                        energyStorage.consumeEnergy(received);
-                        toDistribute -= received;
-                        if (toDistribute <= 0) {
-                            return;
-                        }
-                    }
+    private int chargePlayer(Player player, PoweredMachineEnergyStorage storage, int remaining) {
+        Inventory inventory = player.getInventory();
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            remaining = chargeStack(inventory.getItem(i), storage, remaining);
+            if (remaining == 0) {
+                return 0;
+            }
+        }
+
+        var curios = CuriosCompat.getActiveCurios(player, stack -> !stack.isEmpty());
+        if (curios.isPresent()) {
+            for (ItemStack stack : curios.get()) {
+                remaining = chargeStack(stack, storage, remaining);
+                if (remaining == 0) {
+                    break;
                 }
             }
         }
+        return remaining;
+    }
+
+    private int chargeStack(ItemStack stack, PoweredMachineEnergyStorage storage, int remaining) {
+        if (!stack.isEmpty()) {
+            IEnergyStorage cap = stack.getCapability(Capabilities.EnergyStorage.ITEM);
+            if (cap != null && cap.canReceive()) {
+                int received = cap.receiveEnergy(remaining, false);
+                if (received > 0) {
+                    storage.consumeEnergy(received);
+                    return remaining - received;
+                }
+            }
+        }
+        return remaining;
     }
 
     @Override
