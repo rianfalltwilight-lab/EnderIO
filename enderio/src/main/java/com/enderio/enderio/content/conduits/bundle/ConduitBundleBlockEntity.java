@@ -800,12 +800,26 @@ public final class ConduitBundleBlockEntity extends EnderBlockEntity
 
     @Override
     public List<Holder<Conduit<?, ?>>> getConnectedConduits(Direction side) {
-        return conduitConnections.entrySet()
-                .stream()
-                .filter(e -> e.getValue().getConnectionStatus(side).isConnected())
-                .map(Map.Entry::getKey)
-                .sorted(Comparator.comparingInt(ConduitSorter::getSortIndex))
-                .toList();
+        List<Holder<Conduit<?, ?>>> connected = new ArrayList<>();
+        for (var conduit : conduits) {
+            var connections = conduitConnections.get(conduit);
+            if (connections == null || !connections.getConnectionStatus(side).isConnected()) {
+                continue;
+            }
+            if (!connected.isEmpty() && ConduitSorter.getSortIndex(conduit) <= ConduitSorter.getSortIndex(connected.getLast())) {
+                // Old saves keep their original indices for node recovery. Preserve the map's tie order, too.
+                connected.clear();
+                conduitConnections.forEach((type, container) -> {
+                    if (container.getConnectionStatus(side).isConnected()) {
+                        connected.add(type);
+                    }
+                });
+                connected.sort(Comparator.comparingInt(ConduitSorter::getSortIndex));
+                break;
+            }
+            connected.add(conduit);
+        }
+        return Collections.unmodifiableList(connected);
     }
 
     @Override

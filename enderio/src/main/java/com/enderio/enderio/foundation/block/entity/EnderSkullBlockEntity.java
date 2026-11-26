@@ -10,6 +10,17 @@ import net.neoforged.fml.LogicalSide;
 
 public class EnderSkullBlockEntity extends BlockEntity {
     private float animationticks = 0;
+    private int renderRotation = -1;
+
+    @UseOnly(LogicalSide.CLIENT)
+    public int getRenderRotation(int placedRotation) {
+        return renderRotation < 0 ? placedRotation : renderRotation;
+    }
+
+    @UseOnly(LogicalSide.CLIENT)
+    public void setRenderRotation(int rotation) {
+        renderRotation = rotation;
+    }
 
     public EnderSkullBlockEntity(BlockPos pos, BlockState blockState) {
         super(EIOBlockEntities.ENDER_SKULL.get(), pos, blockState);

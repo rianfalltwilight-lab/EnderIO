@@ -501,10 +501,9 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             // Remove this connection's maps
             accessiblePathsByConnection.remove(connection);
 
-            // Not a fan of having to iterate, but it's probably fine.
+            insertConnections.remove(connection);
+            extractConnections.remove(connection);
             for (var color : DyeColor.values()) {
-                insertConnections.remove(connection);
-                extractConnections.remove(connection);
                 insertConnectionsByChannel.remove(color, connection);
                 extractConnectionsByChannel.remove(color, connection);
             }

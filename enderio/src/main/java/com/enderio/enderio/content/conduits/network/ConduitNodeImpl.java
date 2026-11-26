@@ -311,7 +311,6 @@ public final class ConduitNodeImpl implements INetworkNode<ConduitNetworkImpl, C
         Preconditions.checkState(conduitBundle != null, "Conduit node is detached.");
         Preconditions.checkState(conduitBundle.hasLevel(), "Conduit bundle is not attached to a level");
         Preconditions.checkState(conduitBundle.getLevel().isLoaded(pos), "Conduit bundle is not loaded in a loaded chunk");
-        Preconditions.checkState(isLoaded(), "Conduit node is not loaded - more specific error unavailable.");
     }
 
     private void tryCopyLegacyData() {

@@ -14,23 +14,22 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.Fluid;
 import net.neoforged.neoforge.capabilities.BlockCapabilityCache;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.ICapabilityProvider;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 
-import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindable {
@@ -48,12 +47,17 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
 
     private Soul boundSoul = Soul.EMPTY;
     private SolarSoul.SoulData soulData;
-    private static boolean reload = false;
-    private boolean reloadCache = !reload;
+    private int soulDataVersion = -1;
+    private final BlockPos[] adjacentPositions;
 
     public SolarPanelBlockEntity(BlockEntityType<?> type, BlockPos worldPosition, BlockState blockState, ISolarPanelTier tier) {
         super(type, worldPosition, blockState);
         this.tier = tier;
+        Direction[] directions = Direction.values();
+        adjacentPositions = new BlockPos[directions.length];
+        for (int i = 0; i < directions.length; i++) {
+            adjacentPositions[i] = worldPosition.relative(directions[i]).immutable();
+        }
         
         this.node = new SolarPanelNode(this);
         this.energyStorage = new SolarPanelEnergyStorage(this.node);
@@ -150,7 +154,7 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
     public void bindSoul(Soul newSoul) {
         Preconditions.checkArgument(isSoulValid(newSoul), "Soul is not valid for this block");
         this.boundSoul = newSoul;
-        soulData = SolarSoul.SOLAR.matches(newSoul.entityTypeId()).get();
+        refreshSoulData();
         setChanged();
     }
 
@@ -160,14 +164,9 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
 
     @Override
     public void serverTick() {
-        if (getGenerationRate() > 0) {
-            node.addEnergyToNetwork(getGenerationRate());
-        }
-
-        if (reloadCache != reload && boundSoul.hasEntity()) {
-            Optional<SolarSoul.SoulData> op = SolarSoul.SOLAR.matches(boundSoul.entityType());
-            op.ifPresent(data -> soulData = data);
-            reloadCache = reload;
+        int rate = getGenerationRate();
+        if (rate > 0) {
+            node.addEnergyToNetwork(rate);
         }
 
         // Push energy to non-panel neighbors
@@ -186,12 +185,14 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
      * Generation is scaled at the start and end of the day/night.
      *
      * @return this solar panels generation rate.
-     * @see SolarPanelBlockEntity#hasLiquidSunshine()
-     * @see SolarPanelBlockEntity#hasLiquidDarkness()
      */
     public int getGenerationRate() {
         if (level == null) {
             return 0;
+        }
+
+        if (soulDataVersion != SolarSoul.SOLAR.getReloadVersion()) {
+            refreshSoulData();
         }
 
         //When should the panel make power
@@ -202,18 +203,11 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
             night = soulData.nighttime();
         }
 
-        if ((day && night) || (day && hasLiquidSunshine()) || (night && hasLiquidDarkness())) {
-            return tier.getProductionRate(); //Max power, ignore if it can see the sky
+        if (day && night) {
+            return tier.getProductionRate();
         }
-
-        if (!this.level.dimensionType().hasSkyLight()) {
-            if (soulData == null || soulData.level().isEmpty() || !soulData.level().get().equals(this.level.dimension())) {
-                return 0; //No light in dimension and no soul to override it
-            }
-        }
-
-        if (!this.level.canSeeSky(getBlockPos().above())) {
-            return 0; //No sky, no power
+        if (!day && !night) {
+            return 0;
         }
 
         float outputScale = 0;
@@ -242,7 +236,20 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
                 outputScale = 1;
             }
         }
-        return Mth.ceil(outputScale * tier.getProductionRate());
+        int maxRate = tier.getProductionRate();
+        int rate = Mth.ceil(outputScale * maxRate);
+        if (rate > 0) {
+            boolean validDimension = level.dimensionType().hasSkyLight()
+                    || (soulData != null && soulData.level().isPresent() && soulData.level().get().equals(level.dimension()));
+            if (!validDimension || !level.canSeeSky(adjacentPositions[Direction.UP.ordinal()])) {
+                rate = 0;
+            }
+        }
+        if (rate == maxRate) {
+            return rate;
+        }
+        return hasAdjacentFluid(day ? EIOTags.Fluids.SOLAR_PANEL_LIGHT : EIOTags.Fluids.SOLAR_PANEL_DARK)
+                ? maxRate : rate;
     }
 
     public static float getOutputScale(Level level) {
@@ -281,24 +288,18 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
         return outputScale;
     }
 
-    private boolean hasLiquidSunshine() {
-        for (Direction direction : Direction.values()) {
-            BlockState state = this.level.getBlockState(this.getBlockPos().relative(direction));
-            if (state.getFluidState().is(EIOTags.Fluids.SOLAR_PANEL_LIGHT)) {
+    private boolean hasAdjacentFluid(TagKey<Fluid> tag) {
+        for (BlockPos pos : adjacentPositions) {
+            if (level.getFluidState(pos).is(tag)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean hasLiquidDarkness() {
-        for (Direction direction : Direction.values()) {
-            BlockState state = this.level.getBlockState(this.getBlockPos().relative(direction));
-            if (state.getFluidState().is(EIOTags.Fluids.SOLAR_PANEL_DARK)) {
-                return true;
-            }
-        }
-        return false;
+    private void refreshSoulData() {
+        soulData = boundSoul.hasEntity() ? SolarSoul.SOLAR.matches(boundSoul.entityType()).orElse(null) : null;
+        soulDataVersion = SolarSoul.SOLAR.getReloadVersion();
     }
 
     private static final class GameTicks {
@@ -326,6 +327,7 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
     @Override
     public void loadAdditional(CompoundTag tag, HolderLookup.Provider lookupProvider) {
         boundSoul = Soul.parseOptional(lookupProvider, tag.getCompound(MachineNBTKeys.ENTITY_STORAGE));
+        refreshSoulData();
 
         // Old serialization format
         if (tag.contains(MachineNBTKeys.ENERGY)) {
@@ -354,6 +356,7 @@ public class SolarPanelBlockEntity extends EIOBlockEntity implements SoulBindabl
     protected void applyImplicitComponents(DataComponentInput components) {
         super.applyImplicitComponents(components);
         boundSoul = components.getOrDefault(EIODataComponents.SOUL, Soul.EMPTY);
+        refreshSoulData();
         node.setEnergyStored(components.getOrDefault(EIODataComponents.ENERGY, 0));
     }
 

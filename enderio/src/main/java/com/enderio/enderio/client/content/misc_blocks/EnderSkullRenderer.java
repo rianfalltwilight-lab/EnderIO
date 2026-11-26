@@ -1,7 +1,6 @@
 package com.enderio.enderio.client.content.misc_blocks;
 
 import com.enderio.enderio.foundation.block.entity.EnderSkullBlockEntity;
-import com.enderio.enderio.init.EIOBlocks;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
@@ -30,13 +29,25 @@ import net.minecraft.world.level.block.state.properties.RotationSegment;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import org.jetbrains.annotations.Nullable;
 
+@EventBusSubscriber(value = Dist.CLIENT)
 public class EnderSkullRenderer implements BlockEntityRenderer<EnderSkullBlockEntity> {
 
     public static final RenderType RENDERTYPE = RenderType.entityCutoutNoCullZOffset(ResourceLocation.withDefaultNamespace("textures/entity/enderman/enderman.png"));
     public static final ModelLayerLocation ENDER_SKULL = new ModelLayerLocation(ResourceLocation.withDefaultNamespace("enderman_head"), "main");
 
     private final EnderSkullModel skullmodelbase;
+    @Nullable private static HitResult frameHit;
+
+    @SubscribeEvent
+    public static void beginFrame(RenderFrameEvent.Pre event) {
+        frameHit = null;
+    }
 
     public EnderSkullRenderer(BlockEntityRendererProvider.Context context) {
         skullmodelbase = new EnderSkullModel(context.getModelSet().bakeLayer(ENDER_SKULL));
@@ -49,12 +60,15 @@ public class EnderSkullRenderer implements BlockEntityRenderer<EnderSkullBlockEn
         boolean flag = blockstate.getBlock() instanceof WallSkullBlock;
         Direction direction = flag ? blockstate.getValue(WallSkullBlock.FACING) : null;
         int i = flag ? RotationSegment.convertToSegment(direction.getOpposite()) : blockstate.getValue(SkullBlock.ROTATION);
-        float f1 = RotationSegment.convertToDegrees(i);
+        float f1 = RotationSegment.convertToDegrees(flag ? i : blockEntity.getRenderRotation(i));
         LocalPlayer player = Minecraft.getInstance().player;
         Vec3 position = player.position();
-        HitResult hitResult = player.pick(10D, 0.0f, false); //I would rather not do this every tick, but I don't see how.
+        if (frameHit == null) {
+            frameHit = player.pick(10D, 0.0f, false);
+        }
         skullmodelbase.active = false;
-        if (hitResult instanceof BlockHitResult blockHitResult && player.level().getBlockEntity(blockHitResult.getBlockPos()) == blockEntity) {
+        if (frameHit instanceof BlockHitResult blockHitResult && blockHitResult.getBlockPos().equals(blockEntity.getBlockPos())
+            && player.level().getBlockEntity(blockHitResult.getBlockPos()) == blockEntity) {
             blockEntity.setAnimation(30.0f);
             f = 30.0f;
         }
@@ -62,9 +76,8 @@ public class EnderSkullRenderer implements BlockEntityRenderer<EnderSkullBlockEn
             skullmodelbase.active = true;
             f1 = (float) (Mth.atan2(position.z - blockEntity.getBlockPos().getZ() - 0.5D, position.x - blockEntity.getBlockPos().getX() - 0.5D) * 180.0f / Math.PI + 90);
             f1 += (float) (player.getRandom().nextGaussian() * 2);
-            int rotation = RotationSegment.convertToSegment(f1);
-            if (player.level().getBlockEntity(blockEntity.getBlockPos()) == blockEntity && blockstate.is(EIOBlocks.ENDERMAN_HEAD.get())) {
-                player.level().setBlock(blockEntity.getBlockPos(), blockstate.setValue(SkullBlock.ROTATION, rotation), 3);
+            if (!flag) {
+                blockEntity.setRenderRotation(RotationSegment.convertToSegment(f1));
             }
         }
         SkullBlockRenderer.renderSkull(direction, f1, f, poseStack, buffer, packedLight, skullmodelbase, RENDERTYPE);

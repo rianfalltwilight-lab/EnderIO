@@ -20,6 +20,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,8 @@ public class ConduitShape {
 
     private static final VoxelShape CONNECTOR = Block.box(2.5f, 2.5, 15f, 13.5f, 13.5f, 16f);
     public static final VoxelShape CONNECTION = Block.box(6.5f, 6.5f, 9.5, 9.5f, 9.5f, 16);
+    private static final Map<Direction, VoxelShape> CONNECTORS_BY_DIRECTION = rotatedShapes(CONNECTOR);
+    private static final Map<Direction, VoxelShape> CONNECTIONS_BY_DIRECTION = rotatedShapes(CONNECTION);
     private static final VoxelShape CORE = Block.box(6.5f, 6.5f, 6.5f, 9.5f, 9.5f, 9.5f);
     private VoxelShape totalShape = CORE;
 
@@ -111,7 +114,7 @@ public class ConduitShape {
         this.totalShape = Shapes.empty();
         this.conduitShapes.values()
                 .forEach(s -> this.totalShape = Shapes.joinUnoptimized(this.totalShape, s, BooleanOp.OR));
-        totalShape.optimize();
+        this.totalShape = this.totalShape.optimize();
     }
 
     public VoxelShape getTotalShape() {
@@ -129,19 +132,20 @@ public class ConduitShape {
 
             // TODO: Lift the connector plate out of updateShapeForConduit?
             if (conduitBundle.getConnectionStatus(conduit, direction) == ConnectionStatus.CONNECTED_BLOCK) {
-                VoxelShape connectorShape = rotateVoxelShape(CONNECTOR, direction);
+                VoxelShape connectorShape = CONNECTORS_BY_DIRECTION.get(direction);
                 conduitShape = Shapes.joinUnoptimized(conduitShape, connectorShape, BooleanOp.OR);
-                conduitConnectionShape = Shapes.joinUnoptimized(connectorShape, connectorShape, BooleanOp.OR);
+                conduitConnectionShape = connectorShape;
 
                 individualShapeList.add(connectorShape);
             }
 
             var connectedTypes = conduitBundle.getConnectedConduits(direction);
-            if (connectedTypes.contains(conduit)) {
+            int connectedIndex = connectedTypes.indexOf(conduit);
+            if (connectedIndex >= 0) {
                 Vec3i offset = OffsetHelper.translationFor(direction.getAxis(),
-                        OffsetHelper.offsetConduit(connectedTypes.indexOf(conduit), connectedTypes.size()));
+                        OffsetHelper.offsetConduit(connectedIndex, connectedTypes.size()));
                 offsets.computeIfAbsent(conduit, ignored -> new ArrayList<>()).add(offset);
-                VoxelShape connectionShape = rotateVoxelShape(CONNECTION, direction).move(offset.getX() * 3f / 16f,
+                VoxelShape connectionShape = CONNECTIONS_BY_DIRECTION.get(direction).move(offset.getX() * 3f / 16f,
                         offset.getY() * 3f / 16f, offset.getZ() * 3f / 16f);
                 conduitShape = Shapes.joinUnoptimized(conduitShape, connectionShape, BooleanOp.OR);
 
@@ -209,6 +213,14 @@ public class ConduitShape {
 
         conduitShapes.put(conduit, conduitShape.optimize());
         individualShapeList.add(coreShape.optimize());
+    }
+
+    private static Map<Direction, VoxelShape> rotatedShapes(VoxelShape shape) {
+        var rotations = new EnumMap<Direction, VoxelShape>(Direction.class);
+        for (Direction direction : Direction.values()) {
+            rotations.put(direction, rotateVoxelShape(shape, direction));
+        }
+        return rotations;
     }
 
     /**

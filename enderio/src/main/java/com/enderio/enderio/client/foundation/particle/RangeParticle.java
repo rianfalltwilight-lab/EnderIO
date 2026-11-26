@@ -20,12 +20,15 @@ import org.joml.Vector3f;
 public class RangeParticle extends TextureSheetParticle {
 
     private final int range;
-    private final float offset = 0.01f;
+    private static final float OFFSET = 0.01f;
+    private final AABB renderBounds;
 
     public RangeParticle(ClientLevel level, Vec3 pos, int range, String color) {
         super(level, pos.x, pos.y, pos.z);
         this.range = range;
         this.lifetime = 5;
+        renderBounds = new AABB(pos.x - range - OFFSET, pos.y - range - OFFSET, pos.z - range - OFFSET,
+            pos.x + range + 1 + OFFSET, pos.y + range + 1 + OFFSET, pos.z + range + 1 + OFFSET);
         this.rCol = (float)Integer.parseInt(color.substring(0,2), 16) / 255;
         this.gCol = (float)Integer.parseInt(color.substring(2,4), 16) / 255;
         this.bCol = (float)Integer.parseInt(color.substring(4,6), 16) / 255;
@@ -45,15 +48,17 @@ public class RangeParticle extends TextureSheetParticle {
         float mappedY = (float) (Mth.lerp(partialTicks, this.yo, this.y) - position.y());
         float mappedZ = (float) (Mth.lerp(partialTicks, this.zo, this.z) - position.z());
 
-        // Top face requires different z for some reason
-        Vector3f vec = new Vector3f(-range - offset, -range - offset, range + 1 + offset);
-        renderFace(consumer, remapPosition(calcPoints(Direction.UP, vec), mappedX, mappedY, mappedZ));
-        vec = new Vector3f(-range - offset, -range - offset, -range - offset);
-        renderFace(consumer, remapPosition(calcPoints(Direction.SOUTH, vec), mappedX, mappedY, mappedZ));
-        renderFace(consumer, remapPosition(calcPoints(Direction.EAST, vec), mappedX, mappedY, mappedZ));
-        renderFace(consumer, remapPosition(calcPoints(Direction.UP, vec), mappedX, mappedY, mappedZ));
-        renderFace(consumer, remapPosition(calcPoints(Direction.NORTH, vec), mappedX, mappedY, mappedZ));
-        renderFace(consumer, remapPosition(calcPoints(Direction.WEST, vec), mappedX, mappedY, mappedZ));
+        float low = -range - OFFSET;
+        float high = range + 1 + OFFSET;
+        float x0 = mappedX + low, x1 = mappedX + high;
+        float y0 = mappedY + low, y1 = mappedY + high;
+        float z0 = mappedZ + low, z1 = mappedZ + high;
+        renderFace(consumer, x0, x1, y1, y1, z1, z1, z0, z0);
+        renderFace(consumer, x0, x1, y0, y1, z1, z1, z1, z1);
+        renderFace(consumer, x0, x0, y0, y1, z0, z1, z1, z0);
+        renderFace(consumer, x0, x1, y0, y0, z1, z1, z0, z0);
+        renderFace(consumer, x0, x1, y1, y0, z0, z0, z0, z0);
+        renderFace(consumer, x1, x1, y1, y0, z0, z1, z1, z0);
     }
 
     @Override
@@ -64,11 +69,11 @@ public class RangeParticle extends TextureSheetParticle {
 
     @Override
     public AABB getRenderBoundingBox(float partialTicks) {
-        return AABB.INFINITE;
+        return renderBounds;
     }
 
     public Vector3f[] calcPoints(Direction face, Vector3f vec) {
-        return calcPoints(face, vec.x(), vec.y(), vec.z(), 2 * range + 1 + (offset * 2), 2 * range + 1 + (offset * 2));
+        return calcPoints(face, vec.x(), vec.y(), vec.z(), 2 * range + 1 + (OFFSET * 2), 2 * range + 1 + (OFFSET * 2));
     }
 
     public Vector3f[] calcPoints(Direction face, float x, float y, float z, float w, float h) {
@@ -82,35 +87,25 @@ public class RangeParticle extends TextureSheetParticle {
         };
     }
 
-    private Vector3f[] remapPosition(Vector3f[] coords, float mappedX, float mappedY, float mappedZ) {
-        for (Vector3f vec : coords) {
-            vec.add(mappedX, mappedY, mappedZ);
-        }
-        return coords;
-    }
-
     private Vector3f[] calcCoordinates(float x0, float x1, float y0, float y1, float z0, float z1, float z2, float z3) {
         return new Vector3f[] { new Vector3f(x0, y0, z0), new Vector3f(x1, y0, z1), new Vector3f(x1, y1, z2), new Vector3f(x0, y1, z3) };
     }
 
-    private void renderFace(VertexConsumer consumer, Vector3f[] coords) {
-        float minU = getU0();
-        float maxU = getU1();
-        float minV = getV0();
-        float maxV = getV1();
-        addVertex(consumer, coords[0], minU, minV);
-        addVertex(consumer, coords[1], maxU, minV);
-        addVertex(consumer, coords[2], maxU, maxV);
-        addVertex(consumer, coords[3], minU, maxV);
-        //        backwards
-        addVertex(consumer, coords[1], maxU, minV);
-        addVertex(consumer, coords[0], minU, minV);
-        addVertex(consumer, coords[3], minU, maxV);
-        addVertex(consumer, coords[2], maxU, maxV);
+    private void renderFace(VertexConsumer consumer, float x0, float x1, float y0, float y1,
+            float z0, float z1, float z2, float z3) {
+        float minU = getU0(), maxU = getU1(), minV = getV0(), maxV = getV1();
+        addVertex(consumer, x0, y0, z0, minU, minV);
+        addVertex(consumer, x1, y0, z1, maxU, minV);
+        addVertex(consumer, x1, y1, z2, maxU, maxV);
+        addVertex(consumer, x0, y1, z3, minU, maxV);
+        addVertex(consumer, x1, y0, z1, maxU, minV);
+        addVertex(consumer, x0, y0, z0, minU, minV);
+        addVertex(consumer, x0, y1, z3, minU, maxV);
+        addVertex(consumer, x1, y1, z2, maxU, maxV);
     }
 
-    private void addVertex(VertexConsumer consumer, Vector3f pos, float u, float v) {
-        consumer.addVertex(pos.x(), pos.y(), pos.z()).setUv(u, v).setColor(rCol, gCol, bCol, alpha).setUv2(240, 240);
+    private void addVertex(VertexConsumer consumer, float x, float y, float z, float u, float v) {
+        consumer.addVertex(x, y, z).setUv(u, v).setColor(rCol, gCol, bCol, alpha).setUv2(240, 240);
     }
 
     public static class Provider implements ParticleProvider<RangeParticleData> {

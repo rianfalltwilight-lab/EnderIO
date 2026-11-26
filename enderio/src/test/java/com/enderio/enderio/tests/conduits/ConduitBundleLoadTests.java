@@ -5,6 +5,7 @@ import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConnectionStatus;
 import com.enderio.enderio.api.conduits.connection.config.ConnectionConfig;
 import com.enderio.enderio.api.conduits.network.node.NodeData;
+import com.enderio.enderio.content.conduits.ConduitSorter;
 import com.enderio.enderio.content.conduits.bundle.ConduitBundleBlockEntity;
 import com.enderio.enderio.content.conduits.network.ConduitNetworkSavedData;
 import com.enderio.enderio.content.conduits.type.item.ItemConduitConnectionConfig;
@@ -18,20 +19,26 @@ import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.storage.DimensionDataStorage;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.testframework.junit.EphemeralTestServerProvider;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.util.List;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(EphemeralTestServerProvider.class)
@@ -143,5 +150,54 @@ public class ConduitBundleLoadTests {
         Assertions.assertSame(node, bundle.getConduitNode(conduit));
         Assertions.assertSame(network, node.getNetwork());
         Assertions.assertEquals(7, node.getNodeData(ItemConduitNodeData.TYPE).getIndex(Direction.NORTH));
+    }
+
+    @Test
+    void connectedConduitsRespectDisplayOrderRegardlessOfSaveOrder(MinecraftServer server) {
+        var item = itemConduit(server);
+        var fluid = server.registryAccess().lookupOrThrow(EnderIORegistries.Keys.CONDUIT).getOrThrow(EIOConduits.FLUID);
+        var tag = savedBundle(server, item);
+        var conduits = tag.getList("Conduits", Tag.TAG_STRING);
+        conduits.add(Conduit.CODEC.encodeStart(server.registryAccess().createSerializationContext(NbtOps.INSTANCE), fluid).getOrThrow());
+        var north = new CompoundTag();
+        north.putString("Side", Direction.NORTH.getName());
+        north.putString("Status", ConnectionStatus.CONNECTED_CONDUIT.getSerializedName());
+        var sides = new ListTag();
+        sides.add(north);
+        tag.getList("Connections", Tag.TAG_LIST).add(sides);
+
+        var bundle = new ConduitBundleBlockEntity(BlockPos.ZERO, EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState());
+        bundle.loadWithComponents(tag, server.registryAccess());
+        try (var sorter = mockStatic(ConduitSorter.class)) {
+            sorter.when(() -> ConduitSorter.getSortIndex(item)).thenReturn(1);
+            sorter.when(() -> ConduitSorter.getSortIndex(fluid)).thenReturn(0);
+            Assertions.assertEquals(List.of(fluid, item), bundle.getConnectedConduits(Direction.NORTH));
+            Assertions.assertEquals(List.of(item, fluid), bundle.getConduits());
+            Assertions.assertTrue(bundle.getConnectedConduits(Direction.SOUTH).isEmpty());
+        }
+    }
+
+    @Test
+    void connectorHitsMatchTheConnectedFaceInAllRotations(MinecraftServer server) {
+        var item = itemConduit(server);
+        var bundle = new ConduitBundleBlockEntity(BlockPos.ZERO, EIOBlocks.CONDUIT_BUNDLE.get().defaultBlockState());
+        var tag = savedBundle(server, item);
+        for (var direction : Direction.values()) {
+            tag.getList("Connections", Tag.TAG_LIST).getList(0).getCompound(0).putString("Side", direction.getName());
+            bundle.loadWithComponents(tag, server.registryAccess());
+            var shape = bundle.getShape();
+            shape.updateConduit(bundle);
+
+            var center = Vec3.atCenterOf(BlockPos.ZERO);
+            var offset = Vec3.atLowerCornerOf(direction.getNormal()).scale(0.49);
+            var hit = new BlockHitResult(center.add(offset), direction, BlockPos.ZERO, false);
+            var connection = shape.getConnectionFromHit(BlockPos.ZERO, hit);
+            Assertions.assertNotNull(connection);
+            Assertions.assertEquals(direction, connection.getFirst());
+            Assertions.assertEquals(item, connection.getSecond());
+            Assertions.assertEquals(hit.getLocation(), shape.getTotalShape().closestPointTo(hit.getLocation()).orElseThrow());
+            var opposite = center.subtract(offset);
+            Assertions.assertNotEquals(opposite, shape.getTotalShape().closestPointTo(opposite).orElseThrow());
+        }
     }
 }

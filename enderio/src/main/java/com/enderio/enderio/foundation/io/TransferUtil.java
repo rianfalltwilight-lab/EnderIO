@@ -37,20 +37,28 @@ public class TransferUtil {
 
     private static void moveItems(IItemHandler from, IItemHandler to) {
         for (int i = 0; i < from.getSlots(); i++) {
+            if (from.getStackInSlot(i).isEmpty()) {
+                continue;
+            }
+
+            ItemStack extracted = ItemStack.EMPTY;
             for (int j = 0; j < to.getSlots(); j++) {
-                ItemStack extracted = from.extractItem(i, from.getSlotLimit(i), true);
-                if (!extracted.isEmpty()) {
-                    ItemStack remainder = to.insertItem(j, extracted, false);
-
-                    int successfullyMoved = extracted.getCount() - remainder.getCount();
-                    if (successfullyMoved > 0) {
-                        from.extractItem(i, extracted.getCount() - remainder.getCount(), false);
-                    }
-
-                    // If there is no remainder, take from the next "from" slot.
-                    if (remainder.getCount() <= 0) {
+                if (extracted.isEmpty()) {
+                    extracted = from.extractItem(i, from.getSlotLimit(i), true);
+                    if (extracted.isEmpty()) {
                         break;
                     }
+                }
+
+                ItemStack remainder = to.insertItem(j, extracted, false);
+                int successfullyMoved = extracted.getCount() - remainder.getCount();
+                if (successfullyMoved > 0) {
+                    from.extractItem(i, successfullyMoved, false);
+                    if (remainder.isEmpty()) {
+                        break;
+                    }
+                    // The source can expose a different item or extraction limit after a transfer.
+                    extracted = ItemStack.EMPTY;
                 }
             }
         }

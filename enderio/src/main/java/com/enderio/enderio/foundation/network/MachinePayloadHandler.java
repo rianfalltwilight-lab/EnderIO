@@ -35,7 +35,7 @@ public class MachinePayloadHandler {
         }
 
         public void handleSoulEngineSoul(ClientboundSoulEngineSoulPacket packet, IPayloadContext context) {
-            context.enqueueWork(() -> EngineSoul.ENGINE.map = packet.map());
+            context.enqueueWork(() -> EngineSoul.ENGINE.replaceData(packet.map()));
         }
 
         public void handleFarmingStationSoul(ClientboundFarmStationSoulPacket packet, IPayloadContext context) {
@@ -43,7 +43,7 @@ public class MachinePayloadHandler {
         }
 
         public void handleSolarSoul(ClientboundSolarSoulPacket packet, IPayloadContext context) {
-            context.enqueueWork(() -> SolarSoul.SOLAR.map = packet.map());
+            context.enqueueWork(() -> SolarSoul.SOLAR.replaceData(packet.map()));
         }
     }
 

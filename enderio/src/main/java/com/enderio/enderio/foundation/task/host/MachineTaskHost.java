@@ -114,9 +114,16 @@ public abstract class MachineTaskHost {
     }
 
     private void findNewTaskIfAble() {
-        if (isNewTaskAvailable && canAcceptNewTask.get() && shouldStartNewTask()) {
-            currentTask = getNewTask();
+        if (isNewTaskAvailable && canAcceptNewTask.get()) {
+            // Consume the notification before calling machine code, which may raise another one.
             isNewTaskAvailable = false;
+            refreshTask();
+        }
+    }
+
+    protected void refreshTask() {
+        if (shouldStartNewTask()) {
+            currentTask = getNewTask();
         }
     }
 

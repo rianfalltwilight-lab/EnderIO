@@ -43,9 +43,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.Fluids;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.RecipesUpdatedEvent;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.FluidType;
 import net.neoforged.neoforge.fluids.SimpleFluidContent;
@@ -55,7 +52,6 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Optional;
 import java.util.function.Predicate;
 
-@EventBusSubscriber
 public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements FluidTankUser, SoulBindable {
 
     private static final QuadraticScalable CAPACITY = new QuadraticScalable(CapacitorModifier.ENERGY_CAPACITY,
@@ -73,8 +69,7 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
     @Nullable
     private EngineSoul.SoulData soulData;
     private int burnedTicks = 0;
-    private static boolean reload = false;
-    private boolean reloadCache = !reload;
+    private int soulDataVersion = -1;
 
     public SoulEngineBlockEntity(BlockPos worldPosition, BlockState blockState) {
         super(EIOBlockEntities.SOUL_ENGINE.get(), worldPosition, blockState, true, CapacitorSupport.REQUIRED,
@@ -89,10 +84,8 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
 
     @Override
     public void serverTick() {
-        if (reloadCache != reload && boundSoul.hasEntity()) {
-            Optional<EngineSoul.SoulData> op = EngineSoul.ENGINE.matches(boundSoul.entityType());
-            op.ifPresent(data -> soulData = data);
-            reloadCache = reload;
+        if (soulDataVersion != EngineSoul.ENGINE.getReloadVersion()) {
+            refreshSoulData();
         }
 
         if (soulData != null && isActive()) {
@@ -105,7 +98,7 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
                             && isCapacitorInstalled());
         }
 
-        updateMachineState(MachineState.NOT_SOULBOUND, soulData == null || boundSoul.entityType() != null);
+        updateMachineState(MachineState.NOT_SOULBOUND, soulData == null);
         super.serverTick();
     }
 
@@ -151,7 +144,8 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
     @Override
     public void bindSoul(Soul newSoul) {
         this.boundSoul = newSoul;
-        this.soulData = EngineSoul.ENGINE.matches(newSoul.entityTypeId()).get();
+        refreshSoulData();
+        setChanged();
     }
 
     @Override
@@ -267,6 +261,7 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
         super.loadAdditional(tag, lookupProvider);
         burnedTicks = tag.getInt(BURNED_TICKS);
         boundSoul = Soul.parseOptional(lookupProvider, tag.getCompound(MachineNBTKeys.ENTITY_STORAGE));
+        refreshSoulData();
 
         updateMachineState(MachineState.NO_POWER, false);
         updateMachineState(MachineState.FULL_POWER,
@@ -279,6 +274,7 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
     protected void applyImplicitComponents(DataComponentInput components) {
         super.applyImplicitComponents(components);
         boundSoul = components.getOrDefault(EIODataComponents.SOUL, Soul.EMPTY);
+        refreshSoulData();
 
         SimpleFluidContent storedFluid = components.get(EIODataComponents.ITEM_FLUID_CONTENT);
         if (storedFluid != null) {
@@ -311,8 +307,8 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
                         && isCapacitorInstalled());
     }
 
-    @SubscribeEvent
-    static void onReload(RecipesUpdatedEvent event) {
-        reload = !reload;
+    private void refreshSoulData() {
+        soulData = boundSoul.hasEntity() ? EngineSoul.ENGINE.matches(boundSoul.entityType()).orElse(null) : null;
+        soulDataVersion = EngineSoul.ENGINE.getReloadVersion();
     }
 }

@@ -151,6 +151,10 @@ public class EnderBlockEntity extends BlockEntity {
     }
 
     private byte @Nullable [] createBufferSlotUpdate() {
+        if (dataSlots.isEmpty()) {
+            return null;
+        }
+
         List<Integer> needsUpdate = new ArrayList<>();
         for (int i = 0; i < dataSlots.size(); i++) {
             if (dataSlots.get(i).doesNeedUpdate()) {

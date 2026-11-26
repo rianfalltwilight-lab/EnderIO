@@ -85,5 +85,49 @@ public class TransferUtilTests {
         Assertions.assertEquals(2, from.getStackInSlot(1).getCount());
     }
 
+    @Test
+    void blockedDestinationsSimulateOncePerNonemptySource() {
+        var source = new ItemStackHandler(2) {
+            int simulations;
+
+            @Override
+            public ItemStack extractItem(int slot, int amount, boolean simulate) {
+                if (simulate) {
+                    simulations++;
+                }
+                return super.extractItem(slot, amount, simulate);
+            }
+        };
+        source.setStackInSlot(1, new ItemStack(Items.IRON_INGOT, 5));
+        var target = new ItemStackHandler(3);
+        for (int slot = 0; slot < target.getSlots(); slot++) {
+            target.setStackInSlot(slot, new ItemStack(Items.DIRT, 64));
+        }
+
+        TransferUtil.distributeItems(true, false, source, target);
+
+        Assertions.assertEquals(1, source.simulations);
+        Assertions.assertEquals(5, source.getStackInSlot(1).getCount());
+    }
+
+    @Test
+    void partialInsertionResimulatesAnExtractionLimitedSource() {
+        var source = new ItemStackHandler(1) {
+            @Override
+            public ItemStack extractItem(int slot, int amount, boolean simulate) {
+                return super.extractItem(slot, Math.min(amount, 2), simulate);
+            }
+        };
+        source.setStackInSlot(0, new ItemStack(Items.IRON_INGOT, 5));
+        var target = new ItemStackHandler(2);
+        target.setStackInSlot(0, new ItemStack(Items.IRON_INGOT, 63));
+
+        TransferUtil.distributeItems(true, false, source, target);
+
+        Assertions.assertEquals(64, target.getStackInSlot(0).getCount());
+        Assertions.assertEquals(2, target.getStackInSlot(1).getCount());
+        Assertions.assertEquals(2, source.getStackInSlot(0).getCount());
+    }
+
     // endregion
 }

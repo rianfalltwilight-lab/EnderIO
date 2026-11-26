@@ -5,9 +5,9 @@ import com.enderio.enderio.foundation.io.TransferUtil;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public final class SolarPanelNode implements INetworkNode<SolarPanelNetwork, SolarPanelNode> {
     private final SolarPanelBlockEntity blockEntity;
@@ -34,11 +34,18 @@ public final class SolarPanelNode implements INetworkNode<SolarPanelNetwork, Sol
     }
 
     public void setEnergyStored(int energyStored) {
+        if (network != null) {
+            network.adjustStoredEnergy((long) energyStored - this.energyStored);
+        }
         this.energyStored = energyStored;
     }
 
+    ISolarPanelTier tier() {
+        return blockEntity.tier();
+    }
+
     public int getMaxEnergyStored() {
-        return blockEntity.tier().getStorageCapacity();
+        return tier().getStorageCapacity();
     }
 
     /**
@@ -46,31 +53,37 @@ public final class SolarPanelNode implements INetworkNode<SolarPanelNetwork, Sol
      */
     private int addEnergy(int energy) {
         int energyToInsert = Math.min(getMaxEnergyStored() - getEnergyStored(), energy);
-        energyStored += energyToInsert;
+        if (energyToInsert <= 0) {
+            return 0;
+        }
+        setEnergyStored(energyStored + energyToInsert);
         blockEntity.setChanged();
         return energyToInsert;
     }
 
     public void addEnergyToNetwork(int energy) {
-        int energyInserted = Math.min(getMaxEnergyStored() - getEnergyStored(), energy);
-        energyStored += energyInserted;
-        blockEntity.setChanged();
-
-        if (energyInserted < energy) {
-            for (var node : network.nodes()) {
-                if (node == this) {
-                    continue;
+        if (energy <= 0 || (network != null && network.isKnownFull())) {
+            return;
+        }
+        int remaining = energy - addEnergy(energy);
+        if (remaining <= 0) {
+            return;
+        }
+        for (var node : network.nodes()) {
+            if (node != this) {
+                remaining -= node.addEnergy(remaining);
+                if (remaining == 0) {
+                    return;
                 }
-
-                energyInserted -= node.addEnergy(energy - energyInserted);
             }
         }
+        network.markFull();
     }
 
     public int extractEnergy(int maxExtract, boolean simulate) {
-        int energyExtracted = Math.min(getEnergyStored(), maxExtract);
-        if (!simulate) {
-            this.energyStored = Math.max(getEnergyStored() - energyExtracted, 0);
+        int energyExtracted = Math.max(0, Math.min(getEnergyStored(), maxExtract));
+        if (!simulate && energyExtracted > 0) {
+            setEnergyStored(energyStored - energyExtracted);
             blockEntity.setChanged();
         }
 
@@ -82,13 +95,19 @@ public final class SolarPanelNode implements INetworkNode<SolarPanelNetwork, Sol
             throw new IllegalStateException("Cannot distribute energy from non-primary node");
         }
 
-        Set<IEnergyStorage> validTargets = network.nodes()
-            .stream()
-            .<IEnergyStorage>mapMulti((node, consumer) ->
-                node.blockEntity.getValidPushTargets().forEach(consumer))
-            .collect(Collectors.toSet());
+        int available = network.getTotalEnergyStored();
+        if (available <= 0) {
+            return;
+        }
+        Set<IEnergyStorage> validTargets = new HashSet<>();
+        for (var node : network.nodes()) {
+            validTargets.addAll(node.blockEntity.getValidPushTargets());
+        }
 
-        int transferred = TransferUtil.distributeEnergyEvenlyBetween(network.getTotalEnergyStored(), validTargets);
+        int transferred = TransferUtil.distributeEnergyEvenlyBetween(available, validTargets);
+        if (transferred == 0) {
+            return;
+        }
 
         // Extract from the entire network
         int toExtract = transferred;
@@ -114,8 +133,14 @@ public final class SolarPanelNode implements INetworkNode<SolarPanelNetwork, Sol
 
     @Override
     public void setNetwork(@Nullable SolarPanelNetwork network) {
+        if (this.network != null) {
+            this.network.adjustStoredEnergy(-(long) energyStored);
+            this.network.forgetFullState();
+        }
         this.network = network;
         if (network != null) {
+            network.adjustStoredEnergy(energyStored);
+            network.forgetFullState();
             this.isPrimaryNode = false;
         }
     }
