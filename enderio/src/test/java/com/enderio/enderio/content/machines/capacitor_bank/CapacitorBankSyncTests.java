@@ -6,10 +6,17 @@ import com.enderio.enderio.foundation.network.packets.ClientboundCapacitorBankVa
 import com.google.gson.JsonParser;
 import com.mojang.serialization.JsonOps;
 import io.netty.buffer.Unpooled;
+import com.enderio.enderio.init.EIODataComponents;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
+import net.neoforged.neoforge.event.level.BlockDropsEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.DimensionDataStorage;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
@@ -93,12 +100,67 @@ class CapacitorBankSyncTests {
         var middle = saved.claimNode(BlockPos.ZERO.east());
         var right = saved.claimNode(BlockPos.ZERO.east(2));
         var network = middle.getNetwork();
-        int item = network.takeEnergyForRemoval(middle);
-        network.remove(middle);
+        var removed = network.removeBank(middle);
+        assertEquals(100, left.getNetwork().getTotalEnergyStored());
+        assertEquals(100, right.getNetwork().getTotalEnergyStored());
+        int item = removed.claim();
         assertEquals(91, item);
         assertEquals(92, left.getNetwork().getTotalEnergyStored());
         assertEquals(92, right.getNetwork().getTotalEnergyStored());
         assertEquals(275, item + left.getNetwork().getTotalEnergyStored() + right.getNetwork().getTotalEnergyStored());
+    }
+
+    @Test
+    void lootWithoutCopiedEnergyAndCustomChargesRemainUnchanged(MinecraftServer server) {
+        var bank = mock(CapacitorBankBlockEntity.class);
+        when(bank.previewDropEnergy()).thenReturn(50);
+        var plain = new ItemStack(Blocks.STONE);
+        var custom = new ItemStack(Blocks.STONE);
+        custom.set(EIODataComponents.ENERGY, 17);
+        var plainDrop = mock(ItemEntity.class);
+        var customDrop = mock(ItemEntity.class);
+        when(plainDrop.getItem()).thenReturn(plain);
+        when(customDrop.getItem()).thenReturn(custom);
+        var event = mock(BlockDropsEvent.class);
+        when(event.getState()).thenReturn(Blocks.STONE.defaultBlockState());
+        when(event.getBlockEntity()).thenReturn(bank);
+        when(event.getDrops()).thenReturn(List.of(plainDrop, customDrop));
+        CapacitorBankBlock.chargeDroppedBank(event);
+        verify(bank, never()).claimDroppedEnergy();
+        assertFalse(plain.has(EIODataComponents.ENERGY));
+        assertEquals(17, custom.get(EIODataComponents.ENERGY));
+    }
+
+    @Test
+    void noDropAndChunkUnloadKeepAllEnergyThatFits(MinecraftServer server) {
+        var saved = CapacitorBankSavedData.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString("""
+            [{"energy":100,"redstone":"always_active","nodes":[{"pos":[0,0,0],"capacity":100},
+                {"pos":[1,0,0],"capacity":100}],"edges":[{"first":0,"second":1}]}]
+            """)).getOrThrow();
+        var left = saved.claimNode(BlockPos.ZERO);
+        var right = saved.claimNode(BlockPos.ZERO.east());
+        var network = left.getNetwork();
+        var level = mock(ServerLevel.class);
+        var storage = mock(DimensionDataStorage.class);
+        when(level.getDataStorage()).thenReturn(storage);
+        doReturn(saved).when(storage).computeIfAbsent(any(), eq("enderio_capacitor_bank_network"));
+        var bank = mock(CapacitorBankBlockEntity.class);
+        var tier = mock(CapacitorTier.class);
+        when(tier.getStorageCapacity()).thenReturn(100);
+        when(bank.tier()).thenReturn(tier);
+        when(bank.getLevel()).thenReturn(level);
+        when(bank.getBlockPos()).thenReturn(right.getPos());
+        right.attach(bank);
+        right.detach(bank);
+        assertFalse(right.hasBlockEntity());
+        assertSame(right, saved.claimNode(right.getPos()));
+        assertEquals(100, network.getTotalEnergyStored());
+        assertEquals(200, network.getTotalMaxEnergyStored());
+        assertEquals(50, network.energyForRemoval(right));
+        assertEquals(100, network.getTotalEnergyStored());
+        network.removeBank(right);
+        assertEquals(100, network.getTotalEnergyStored());
+        assertEquals(100, network.getTotalMaxEnergyStored());
     }
 
     @Test

@@ -67,7 +67,8 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
 
     private final CapacitorTier tier;
     private CapacitorBankNode node;
-    private int energyForDrop;
+    @Nullable private CapacitorBankNetwork.RemovedBankEnergy removedEnergy;
+    private boolean dropSettled;
     @Nullable private CapacitorBankDisplay clientDisplay;
 
     public CapacitorBankDisplay clientDisplay() {
@@ -165,9 +166,28 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
     public void removeNode() {
         if (node != null && node.isValid()) {
             var network = node.getNetwork();
-            energyForDrop = network.takeEnergyForRemoval(node);
-            network.remove(node);
+            if (dropSettled) {
+                network.remove(node);
+            } else {
+                removedEnergy = network.removeBank(node);
+            }
         }
+    }
+
+    int claimDroppedEnergy() {
+        if (dropSettled) {
+            return 0;
+        }
+        dropSettled = true;
+        if (node != null && node.isValid()) {
+            return node.getNetwork().takeEnergyForRemoval(node);
+        }
+        return removedEnergy == null ? 0 : removedEnergy.claim();
+    }
+
+    int previewDropEnergy() {
+        return node != null && node.isValid() ? node.getNetwork().energyForRemoval(node)
+            : removedEnergy == null ? 0 : removedEnergy.wanted();
     }
 
     @Override
@@ -549,7 +569,7 @@ public class CapacitorBankBlockEntity extends EIOBlockEntity implements MenuProv
         }
 
         // Level.destroyBlock collects loot before removing the block; player mining collects it afterwards.
-        int energy = node != null && node.isValid() ? node.getNetwork().energyForRemoval(node) : energyForDrop;
+        int energy = previewDropEnergy();
         if (energy != 0) {
             components.set(EIODataComponents.ENERGY, energy);
         }

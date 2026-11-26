@@ -4,15 +4,25 @@ import com.enderio.enderio.EnderIO;
 import com.enderio.enderio.content.machines.capacitor_bank.CapacitorTier;
 import com.enderio.enderio.gametests.util.EnderGameTestHelper;
 import com.enderio.enderio.init.EIOBlocks;
+import com.enderio.enderio.init.EIODataComponents;
+import com.mojang.authlib.GameProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
+import net.minecraft.world.phys.AABB;
+import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.testframework.DynamicTest;
 import net.neoforged.testframework.annotation.ForEachTest;
 import net.neoforged.testframework.annotation.RegisterStructureTemplate;
 import net.neoforged.testframework.annotation.TestHolder;
 import net.neoforged.testframework.gametest.StructureTemplateBuilder;
 
+import java.util.UUID;
 import java.util.function.Supplier;
 
 @ForEachTest(groups = "machines.capacitor_bank")
@@ -79,6 +89,43 @@ public class CapacitorBankTests {
             .thenExecuteAfter(20, () -> helper.assertEnergyStored(0,1,0, 2 * CapacitorTier.BASIC.getStorageCapacity()))
             .thenExecute(() -> helper.destroyBlock(new BlockPos(0,2,0))) //Remove the Block
             .thenExecuteAfter(20, () -> helper.assertEnergyStored(0,1,0, CapacitorTier.BASIC.getStorageCapacity()))
+            .thenSucceed();
+    }
+
+    @GameTest(template = DOUBLE_CAPACITOR_BANKS)
+    @TestHolder(description = "Dropping a capacitor bank before removing its block transfers its share once.")
+    public static void testDestroyChargedBankWithDrops(EnderGameTestHelper helper) {
+        checkDroppedBank(helper, false);
+    }
+
+    @GameTest(template = DOUBLE_CAPACITOR_BANKS)
+    @TestHolder(description = "Survival mining transfers the removed capacitor bank's share to its drop.")
+    public static void testMineChargedBank(EnderGameTestHelper helper) {
+        checkDroppedBank(helper, true);
+    }
+
+    private static void checkDroppedBank(EnderGameTestHelper helper, boolean mine) {
+        var level = helper.getLevel();
+        var pos = helper.absolutePos(new BlockPos(0, 2, 0));
+        int energy = CapacitorTier.BASIC.getStorageCapacity();
+        helper.startSequence()
+            .thenExecute(() -> helper.provideEnergy(0, 1, 0, energy))
+            .thenExecuteAfter(20, () -> {
+                if (mine) {
+                    var player = FakePlayerFactory.get(level, new GameProfile(UUID.randomUUID(), "bank-harvest"));
+                    player.gameMode.changeGameModeForPlayer(GameType.SURVIVAL);
+                    player.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.DIAMOND_PICKAXE));
+                    helper.assertTrue(player.gameMode.destroyBlock(pos), "Survival mining failed");
+                } else {
+                    helper.assertTrue(level.destroyBlock(pos, true), "Failed to destroy bank with drops");
+                }
+                var item = EIOBlocks.CAPACITOR_BANKS.get(CapacitorTier.BASIC).get().asItem();
+                var drops = level.getEntitiesOfClass(ItemEntity.class, new AABB(pos).inflate(1), entity -> entity.getItem().is(item));
+                helper.assertTrue(drops.size() == 1, "Expected one capacitor bank drop, found " + drops.size());
+                int stored = drops.getFirst().getItem().getOrDefault(EIODataComponents.ENERGY, 0);
+                helper.assertTrue(stored == energy / 2, "Expected half of the bank energy in the drop, found " + stored);
+                helper.assertEnergyStored(0, 1, 0, energy - stored);
+            })
             .thenSucceed();
     }
 

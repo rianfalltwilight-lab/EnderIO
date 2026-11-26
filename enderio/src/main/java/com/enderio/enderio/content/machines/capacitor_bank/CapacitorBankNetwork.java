@@ -245,6 +245,42 @@ public class CapacitorBankNetwork extends Network<CapacitorBankNetwork, Capacito
         return extractEnergy(node.getPos(), null, energyForRemoval(node), false);
     }
 
+    // Mining can remove the node before loot is evaluated. Keep as much energy in the remaining banks
+    // as they can hold, and remember how much was displaced by the lost capacity.
+    RemovedBankEnergy removeBank(CapacitorBankNode node) {
+        int wanted = energyForRemoval(node);
+        int overflow = Math.toIntExact(Math.max(0, totalEnergyStored - (totalMaxEnergyStored - node.getCapacity())));
+        var remaining = new ArrayList<CapacitorBankNetwork>();
+        remove(node, remaining::add);
+        if (!isEmpty()) {
+            remaining.add(this);
+        }
+        return new RemovedBankEnergy(wanted, overflow, remaining);
+    }
+
+    record RemovedBankEnergy(int wanted, int overflow, List<CapacitorBankNetwork> remaining) {
+        int claim() {
+            long stored = 0;
+            for (var network : remaining) {
+                if (network.isValid()) {
+                    stored += network.totalEnergyStored;
+                }
+            }
+            int needed = (int) Math.min(wanted - overflow, stored);
+            int claimed = overflow;
+            for (var network : remaining) {
+                if (needed == 0) break;
+                if (!network.isValid()) continue;
+                long available = network.totalEnergyStored;
+                int amount = (int) proportionalShare(needed, available, stored);
+                claimed += network.extractEnergy(BlockPos.ZERO, null, amount, false);
+                needed -= amount;
+                stored -= available;
+            }
+            return claimed;
+        }
+    }
+
     public void tick(ServerLevel serverLevel) {
         distributeEnergy();
 
