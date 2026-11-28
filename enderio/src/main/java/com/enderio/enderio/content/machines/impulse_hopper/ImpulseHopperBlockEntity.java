@@ -120,6 +120,7 @@ public class ImpulseHopperBlockEntity extends PoweredMachineBlockEntity {
             stack.shrink(ghost.getCount());
             OUTPUT.get(i).setStackInSlot(this, result);
         }
+        onMachineUsed();
     }
 
     public boolean ghostSlotHasItem(int slot) {

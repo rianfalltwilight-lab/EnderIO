@@ -244,19 +244,49 @@ public abstract class PoweredMachineBlockEntity extends MachineBlockEntity imple
         updateMachineState(MachineState.NO_CAPACITOR, supportsCapacitor() && !isCapacitorInstalled());
     }
 
-    // TODO: Ensure this is called by all machines.
-    protected void onMachineUsed() {
-        if (supportsCapacitor()) {
-            if (!(level instanceof ServerLevel serverLevel)) {
-                return;
-            }
+    /** Machines that run continuously wear their capacitor once for this many ticks of work. */
+    public static final int ACTIVE_TICKS_PER_USE = 200;
 
-            var capacitorItem = getCapacitorItem();
-            var capacitorExtension = capacitorItem.getCapability(EnderIOCapabilities.CAPACITOR_EXTENSION);
-            if (capacitorExtension != null) {
-                capacitorExtension.onMachineUsed(capacitorItem, serverLevel);
-            }
+    private int activeTicks;
+
+    /**
+     * Wear the capacitor once, for one finished job: a craft, a spawn, a bucket moved.
+     * Only capacitors with an {@link com.enderio.enderio.api.capacitor.ICapacitorExtension} react.
+     */
+    protected void onMachineUsed() {
+        if (!supportsCapacitor() || !(level instanceof ServerLevel serverLevel)) {
+            return;
         }
+
+        var capacitorItem = getCapacitorItem();
+        var capacitorExtension = capacitorItem.getCapability(EnderIOCapabilities.CAPACITOR_EXTENSION);
+        if (capacitorExtension == null) {
+            return;
+        }
+
+        int damage = capacitorItem.getDamageValue();
+        capacitorExtension.onMachineUsed(capacitorItem, serverLevel);
+        if (capacitorItem.isEmpty()) {
+            // Breaking changes the stack in place, which the inventory does not report.
+            updateCapacitorData();
+            setChanged();
+        } else if (capacitorItem.getDamageValue() != damage) {
+            setChanged();
+        }
+    }
+
+    /** Report work done by a machine that has no distinct jobs. */
+    protected void onMachineActive(int ticks) {
+        activeTicks += ticks;
+        while (activeTicks >= ACTIVE_TICKS_PER_USE) {
+            activeTicks -= ACTIVE_TICKS_PER_USE;
+            onMachineUsed();
+        }
+    }
+
+    /** Called by the task host when a task finishes having done its job. */
+    public void onTaskCompleted() {
+        onMachineUsed();
     }
 
     // region MachineInstallable Implementation

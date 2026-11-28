@@ -137,6 +137,7 @@ public class FarmingStationBlockEntity extends PoweredMachineBlockEntity impleme
         if (canAct(10) &&  getEnergyStorage().getEnergyStored() >= getMaxEnergyUse() * 10) {
             processFarmTask();
             getEnergyStorage().consumeEnergy(getMaxEnergyUse() * 10);
+            onMachineActive(10);
         }
 
         super.serverTick();

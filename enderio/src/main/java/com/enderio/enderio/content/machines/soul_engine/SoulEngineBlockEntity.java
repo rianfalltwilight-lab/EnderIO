@@ -160,6 +160,7 @@ public class SoulEngineBlockEntity extends PoweredMachineBlockEntity implements 
                 TANK.drain(this, 1, IFluidHandler.FluidAction.EXECUTE);
                 getEnergyStorage().addEnergy(energy);
                 burnedTicks -= soulData.tickpermb();
+                onMachineActive(soulData.tickpermb());
             }
         } else {
             burnedTicks += getBurnRate();

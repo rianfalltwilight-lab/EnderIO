@@ -90,6 +90,7 @@ public class StirlingGeneratorBlockEntity extends PoweredMachineBlockEntity {
 
             if (!requiresCapacitor() || isCapacitorInstalled()) {
                 getEnergyStorage().addEnergy(getGenerationRate());
+                onMachineActive(1);
             }
         }
 

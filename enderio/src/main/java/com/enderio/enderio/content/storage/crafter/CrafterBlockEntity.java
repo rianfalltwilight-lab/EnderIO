@@ -196,6 +196,7 @@ public class CrafterBlockEntity extends PoweredMachineBlockEntity {
         outputBuffer.removeIf(ItemStack::isEmpty);
         // consume power
         getEnergyStorage().consumeEnergy(MachinesConfig.COMMON.ENERGY.CRAFTING_RECIPE_COST.get(), false);
+        onMachineUsed();
         // check resource reload
         if (level.getRecipeManager().byKey(recipe.id()).orElse(null) != recipe) {
             recipe = null;

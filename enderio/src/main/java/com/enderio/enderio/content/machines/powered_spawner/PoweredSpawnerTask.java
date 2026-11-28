@@ -47,6 +47,12 @@ public abstract class PoweredSpawnerTask implements PoweredMachineTask {
     }
 
     @Override
+    public boolean didWork() {
+        // Switching modes or failing to load also completes the task, without the energy having been paid.
+        return isComplete && energyCost > 0 && energyConsumed >= energyCost;
+    }
+
+    @Override
     public boolean isCompleted() {
         return blockEntity.getMode() != spawnerMode || isComplete;
     }

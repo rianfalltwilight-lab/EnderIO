@@ -1,5 +1,6 @@
 package com.enderio.enderio.foundation.task.host;
 
+import com.enderio.enderio.foundation.block.entity.PoweredMachineBlockEntity;
 import com.enderio.core.common.blockentity.EnderBlockEntity;
 import com.enderio.core.common.network.NetworkDataSlot;
 import com.enderio.core.annotations.UseOnly;
@@ -32,6 +33,7 @@ public abstract class MachineTaskHost {
     @UseOnly(LogicalSide.CLIENT)
     private float clientTaskProgress;
 
+    private final EnderBlockEntity blockEntity;
     private final Supplier<Level> levelSupplier;
     private final Supplier<Boolean> canAcceptNewTask;
 
@@ -44,6 +46,7 @@ public abstract class MachineTaskHost {
 
     /** Machines using MENU supply the authoritative progress to their open menu and server-side HUD providers. */
     public MachineTaskHost(EnderBlockEntity blockEntity, Supplier<Boolean> canAcceptNewTask, ProgressSync progressSync) {
+        this.blockEntity = blockEntity;
         levelSupplier = blockEntity::getLevel;
         this.canAcceptNewTask = canAcceptNewTask;
 
@@ -117,6 +120,9 @@ public abstract class MachineTaskHost {
         }
 
         if (currentTask.isCompleted()) {
+            if (currentTask.didWork() && blockEntity instanceof PoweredMachineBlockEntity machine) {
+                machine.onTaskCompleted();
+            }
             currentTask = null;
             newTaskAvailable();
             findNewTaskIfAble();

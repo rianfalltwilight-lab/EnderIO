@@ -181,6 +181,7 @@ public abstract class ObeliskBlockEntity<T extends ObeliskBlockEntity<T>> extend
         if (isActive()) {
             int amount = getPerTickEnergyCost();
             getEnergyStorage().consumeEnergy(amount);
+            onMachineActive(1);
         }
     }
 

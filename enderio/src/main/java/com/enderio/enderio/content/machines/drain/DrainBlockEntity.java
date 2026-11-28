@@ -200,6 +200,7 @@ public class DrainBlockEntity extends PoweredMachineBlockEntity implements Range
             level.setBlock(pos.immutable(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
             TANK.fill(this, bucket, IFluidHandler.FluidAction.EXECUTE);
             consumed -= ENERGY_PER_BUCKET;
+            onMachineUsed();
             if (currentIndex == count) {
                 resetScan();
             } else {

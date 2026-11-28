@@ -9,4 +9,9 @@ public interface MachineTask extends INBTSerializable<CompoundTag> {
     float getProgress();
 
     boolean isCompleted();
+
+    /** Whether a completed task actually did its job, rather than being abandoned. */
+    default boolean didWork() {
+        return true;
+    }
 }

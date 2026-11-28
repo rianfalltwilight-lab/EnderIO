@@ -97,6 +97,9 @@ public class WiredChargerBlockEntity extends PoweredMachineBlockEntity {
                     int accepted = itemEnergyHandler.receiveEnergy(taken, true);
                     itemEnergyHandler.receiveEnergy(accepted, false);
                     getEnergyStorage().consumeEnergy(accepted, false);
+                    if (accepted > 0) {
+                        onMachineActive(1);
+                    }
                     this.progress = (float) itemEnergyHandler.getEnergyStored()
                             / itemEnergyHandler.getMaxEnergyStored();
                 }

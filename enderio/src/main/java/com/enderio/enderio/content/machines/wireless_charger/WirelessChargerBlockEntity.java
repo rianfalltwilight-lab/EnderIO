@@ -152,6 +152,7 @@ public class WirelessChargerBlockEntity extends PoweredMachineBlockEntity implem
         super.serverTick();
         if (isActive()) {
             getEnergyStorage().consumeEnergy(energyUpkeep.get());
+            onMachineActive(1);
             chargeItem();
         }
     }

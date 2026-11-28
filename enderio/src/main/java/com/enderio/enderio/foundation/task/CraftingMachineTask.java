@@ -47,6 +47,7 @@ public abstract class CraftingMachineTask<R extends MachineRecipe<T>, T extends 
     private List<OutputStack> outputs = List.of();
 
     private boolean isComplete;
+    private boolean producedOutput;
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
@@ -170,6 +171,7 @@ public abstract class CraftingMachineTask<R extends MachineRecipe<T>, T extends 
 
                 // The receiver was able to take the outputs, task complete.
                 isComplete = true;
+                producedOutput = true;
             }
         }
     }
@@ -181,6 +183,11 @@ public abstract class CraftingMachineTask<R extends MachineRecipe<T>, T extends 
         }
 
         return progressMade / (float) progressRequired;
+    }
+
+    @Override
+    public boolean didWork() {
+        return producedOutput;
     }
 
     @Override
