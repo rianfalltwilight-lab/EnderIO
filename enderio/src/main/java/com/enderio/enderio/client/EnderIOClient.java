@@ -205,7 +205,7 @@ public class EnderIOClient {
             ItemProperties.register(EIOItems.CONDUIT_PROBE.get(), ConduitProbeItem.PROBE_STATE_PREDICATE,
                 (stack, level, player, seed) -> {
                     ConduitProbeItem.State state = ConduitProbeItem.getState(stack);
-                    return state == ConduitProbeItem.State.COPY_PASTE ? 1.0f : 0.0f;
+                    return state == ConduitProbeItem.State.PROBE ? 0.0f : 1.0f;
                 });
 
             // Register fluid render types

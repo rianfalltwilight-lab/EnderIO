@@ -1,5 +1,9 @@
 package com.enderio.enderio.tests.conduits.network;
 
+import java.util.List;
+import net.minecraft.nbt.NbtOps;
+import io.netty.buffer.Unpooled;
+import com.enderio.enderio.content.conduits.ConduitLine;
 import com.enderio.enderio.api.EnderIORegistries;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConnectionStatus;
@@ -223,5 +227,65 @@ class ItemExtractionTests {
         var report = ConduitDiagnostics.describe(conduit, source.node(), FACE, gameTime);
         assertEquals(4, report.size(), report.toString());
         assertTrue(report.get(3).toString().contains("destinations_full"), report.toString());
+    }
+
+    @Test
+    void aLongerIntervalMovesMoreAtOnceButNoFaster() {
+        var drawer = new BulkSlot(new ItemStack(Items.IRON_INGOT), 10_000);
+        var chest = new ItemStackHandler(100);
+        var source = endpoint(0, EXTRACT.withExtractInterval(35), drawer);
+        var network = line(source, endpoint(1, INSERT, chest));
+
+        // 35 ticks round up to four 10 tick cycles.
+        tickAt(network, 0);
+        assertEquals(2048, total(chest));
+        for (long time = 10; time < 40; time += 10) {
+            tickAt(network, time);
+        }
+        assertEquals(2048, total(chest));
+
+        // A network change does not let it run early.
+        source.node().onRedstoneChanged();
+        tickAt(network, 30);
+        assertEquals(2048, total(chest));
+
+        tickAt(network, 40);
+        assertEquals(4096, total(chest));
+    }
+
+    @Test
+    void balancedDeliverySharesEachCycleBetweenDestinations() {
+        var drawer = new BulkSlot(new ItemStack(Items.IRON_INGOT), 10_000);
+        var first = new ItemStackHandler(27);
+        var second = new ItemStackHandler(27);
+        var network = line(endpoint(0, EXTRACT.withIsBalanced(true), drawer), endpoint(1, INSERT.withPriority(5), first),
+            endpoint(2, INSERT, second));
+
+        tickAt(network, 0);
+
+        assertEquals(256, total(first));
+        assertEquals(256, total(second));
+    }
+
+    @Test
+    void newSettingsSurviveSavingAndSyncing(MinecraftServer server) {
+        var config = EXTRACT.withExtractInterval(100).withIsBalanced(true).withPriority(-7);
+        var ops = server.registryAccess().createSerializationContext(NbtOps.INSTANCE);
+        var codec = ItemConduitConnectionConfig.CODEC.codec();
+        assertEquals(config, codec.parse(ops, codec.encodeStart(ops, config).getOrThrow()).getOrThrow());
+
+        var buffer = Unpooled.buffer();
+        ItemConduitConnectionConfig.STREAM_CODEC.encode(buffer, config);
+        assertEquals(config, ItemConduitConnectionConfig.STREAM_CODEC.decode(buffer));
+        assertEquals(1200, config.withExtractInterval(99_999).extractInterval());
+    }
+
+    @Test
+    void linesRunAlongTheLongestAxisFirst() {
+        var route = ConduitLine.route(new BlockPos(0, 0, 0), new BlockPos(1, 0, -3));
+
+        assertEquals(List.of(new BlockPos(0, 0, 0), new BlockPos(0, 0, -1), new BlockPos(0, 0, -2), new BlockPos(0, 0, -3),
+            new BlockPos(1, 0, -3)), route);
+        assertEquals(List.of(BlockPos.ZERO), ConduitLine.route(BlockPos.ZERO, BlockPos.ZERO));
     }
 }

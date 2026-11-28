@@ -79,6 +79,7 @@ public class ConduitProbeItem extends Item {
                     handlePaste(conduit, face, stack, player);
                 }
             }
+            case PASTE_NETWORK -> handlePasteNetwork(conduit, stack, player);
             case PROBE -> throw new IllegalStateException("Probing is handled above.");
         }
         return InteractionResult.SUCCESS;
@@ -90,6 +91,21 @@ public class ConduitProbeItem extends Item {
             ConduitDiagnostics.describe(conduit, bundle.getConduitNode(conduit), face, gameTime)
                     .forEach(player::sendSystemMessage);
         }
+    }
+
+    /**
+     * Applies the copied configuration to every connection in the network that works in the same direction as the copy:
+     * extracting settings go to extracting connections, inserting settings to inserting ones.
+     */
+    private void handlePasteNetwork(ConduitBundleBlockEntity clicked, ItemStack stack, Player player) {
+        ProbeConfigData configData = stack.get(EIODataComponents.PROBE_CONFIG);
+        if (configData == null || clicked.getLevel() == null) {
+            player.sendSystemMessage(ConduitLang.CONDUIT_PROBE_NOTHING_COPIED.copy().withStyle(ChatFormatting.YELLOW));
+            return;
+        }
+
+        int applied = ConduitNetworkConfigurator.apply(clicked, configData.conduitData(), player);
+        player.sendSystemMessage(TooltipUtil.withArgs(ConduitLang.CONDUIT_PROBE_APPLIED_TO_NETWORK, applied));
     }
 
     private static final Set<String> SKIP_FIELDS = Set.of("DEFAULT", "CODEC", "STREAM_CODEC", "TYPE");
@@ -222,12 +238,14 @@ public class ConduitProbeItem extends Item {
 
     public enum State {
         PROBE,
-        COPY_PASTE;
+        COPY_PASTE,
+        PASTE_NETWORK;
 
         public Component getStateText() {
             return switch (this) {
                 case PROBE -> ConduitLang.CONDUIT_PROBE_STATE_PROBE;
                 case COPY_PASTE -> ConduitLang.CONDUIT_PROBE_STATE_COPY_PASTE;
+                case PASTE_NETWORK -> ConduitLang.CONDUIT_PROBE_STATE_PASTE_NETWORK;
             };
         }
 

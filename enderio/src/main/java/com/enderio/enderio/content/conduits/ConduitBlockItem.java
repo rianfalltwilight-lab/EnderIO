@@ -1,5 +1,13 @@
 package com.enderio.enderio.content.conduits;
 
+import com.enderio.enderio.init.EIODataComponents;
+import java.util.ArrayList;
+import net.minecraft.core.GlobalPos;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import com.enderio.core.common.item.ICustomCreativeTabEntries;
 import com.enderio.core.common.util.TooltipUtil;
 import com.enderio.enderio.api.EnderIOCapabilities;
@@ -55,6 +63,116 @@ public class ConduitBlockItem extends BlockItem implements ICustomCreativeTabEnt
     @Override
     public String getDescriptionId() {
         return getOrCreateDescriptionId();
+    }
+
+    public static boolean isLineMode(ItemStack stack) {
+        return stack.getItem() instanceof ConduitBlockItem && stack.has(EIODataComponents.CONDUIT_LINE_MODE);
+    }
+
+    /** Sneak and use on air to switch line mode on or off. */
+    @Override
+    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
+        var stack = player.getItemInHand(hand);
+        if (!player.isShiftKeyDown()) {
+            return InteractionResultHolder.pass(stack);
+        }
+
+        if (!level.isClientSide()) {
+            boolean enable = !stack.has(EIODataComponents.CONDUIT_LINE_MODE);
+            if (enable) {
+                stack.set(EIODataComponents.CONDUIT_LINE_MODE, true);
+            } else {
+                stack.remove(EIODataComponents.CONDUIT_LINE_MODE);
+            }
+            stack.remove(EIODataComponents.CONDUIT_LINE_START);
+            player.displayClientMessage(enable ? ConduitLang.CONDUIT_LINE_ON : ConduitLang.CONDUIT_LINE_OFF, true);
+        }
+
+        return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
+    }
+
+    @Override
+    public InteractionResult useOn(UseOnContext context) {
+        var player = context.getPlayer();
+        if (player == null || !isLineMode(context.getItemInHand())) {
+            return super.useOn(context);
+        }
+
+        Level level = context.getLevel();
+        if (level.isClientSide()) {
+            return InteractionResult.SUCCESS;
+        }
+
+        var clicked = context.getClickedPos();
+        var clickedState = level.getBlockState(clicked);
+        var target = clickedState.canBeReplaced() || clickedState.is(EIOBlocks.CONDUIT_BUNDLE.get()) ? clicked
+                : clicked.relative(context.getClickedFace());
+
+        var stack = context.getItemInHand();
+        var start = stack.get(EIODataComponents.CONDUIT_LINE_START);
+        if (start == null || !start.dimension().equals(level.dimension())) {
+            stack.set(EIODataComponents.CONDUIT_LINE_START, GlobalPos.of(level.dimension(), target));
+            player.displayClientMessage(ConduitLang.CONDUIT_LINE_STARTED, true);
+        } else {
+            stack.remove(EIODataComponents.CONDUIT_LINE_START);
+            placeLine(context, player, start.pos(), target);
+        }
+
+        return InteractionResult.CONSUME;
+    }
+
+    /**
+     * Places the whole line or nothing. This runs inside the use of the item, so placement events and protection mods
+     * see every block of it.
+     */
+    private void placeLine(UseOnContext context, Player player, BlockPos start, BlockPos end) {
+        Level level = context.getLevel();
+        var stack = context.getItemInHand();
+        Holder<Conduit<?, ?>> conduit = stack.get(EnderIODataComponents.CONDUIT);
+        if (conduit == null) {
+            return;
+        }
+
+        if (start.distManhattan(end) + 1 > ConduitLine.MAX_LENGTH) {
+            player.displayClientMessage(TooltipUtil.withArgs(ConduitLang.CONDUIT_LINE_TOO_LONG, ConduitLine.MAX_LENGTH), true);
+            return;
+        }
+
+        var needed = new ArrayList<BlockPos>();
+        for (var pos : ConduitLine.route(start, end)) {
+            var bundle = level.getBlockEntity(pos) instanceof ConduitBundleBlockEntity found ? found : null;
+            if (bundle != null && bundle.hasConduitStrict(conduit)) {
+                continue;
+            }
+
+            boolean usable = level.isLoaded(pos) && level.mayInteract(player, pos)
+                    && player.mayUseItemAt(pos, context.getClickedFace(), stack)
+                    && (bundle != null ? bundle.canAddConduit(conduit) : level.getBlockState(pos).canBeReplaced());
+            if (!usable) {
+                player.displayClientMessage(
+                        TooltipUtil.withArgs(ConduitLang.CONDUIT_LINE_BLOCKED, pos.getX(), pos.getY(), pos.getZ()), true);
+                return;
+            }
+            needed.add(pos);
+        }
+
+        if (!player.getAbilities().instabuild && stack.getCount() < needed.size()) {
+            player.displayClientMessage(TooltipUtil.withArgs(ConduitLang.CONDUIT_LINE_NOT_ENOUGH, needed.size()), true);
+            return;
+        }
+
+        // Placing consumes the stack, which may empty it before the last block.
+        var template = stack.copy();
+        int placed = 0;
+        for (var pos : needed) {
+            var hit = new BlockHitResult(Vec3.atCenterOf(pos), context.getClickedFace(), pos, false);
+            var placeStack = player.getAbilities().instabuild ? template.copy() : stack;
+            if (place(new BlockPlaceContext(level, player, context.getHand(), placeStack, hit)).consumesAction()) {
+                placed++;
+            }
+        }
+
+        player.displayClientMessage(TooltipUtil.withArgs(ConduitLang.CONDUIT_LINE_PLACED, placed), true);
     }
 
     @Override
@@ -135,6 +253,9 @@ public class ConduitBlockItem extends BlockItem implements ICustomCreativeTabEnt
                 tooltipComponents.add(EIOCommonLang.SHOW_DETAIL_TOOLTIP);
             }
         }
+
+        tooltipComponents.add(stack.has(EIODataComponents.CONDUIT_LINE_MODE) ? ConduitLang.CONDUIT_LINE_ON
+                : ConduitLang.CONDUIT_LINE_HINT);
 
         super.appendHoverText(stack, context, tooltipComponents, tooltipFlag);
     }

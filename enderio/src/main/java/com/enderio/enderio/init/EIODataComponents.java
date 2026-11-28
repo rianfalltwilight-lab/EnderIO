@@ -1,5 +1,6 @@
 package com.enderio.enderio.init;
 
+import net.minecraft.core.GlobalPos;
 import com.enderio.core.common.util.NamedFluidContents;
 import com.enderio.enderio.EnderIO;
 import com.enderio.enderio.api.EnderIODataComponents;
@@ -170,6 +171,12 @@ public class EIODataComponents {
     }
 
     // Creates the object immediately to ensure we can use it for item creation.
+    public static final DataComponentType<Boolean> CONDUIT_LINE_MODE = register("conduit_line_mode",
+        builder -> builder.persistent(Codec.BOOL).networkSynchronized(ByteBufCodecs.BOOL));
+
+    public static final DataComponentType<GlobalPos> CONDUIT_LINE_START = register("conduit_line_start",
+        builder -> builder.persistent(GlobalPos.CODEC).networkSynchronized(GlobalPos.STREAM_CODEC));
+
     private static <T> DataComponentType<T> register(String name, UnaryOperator<DataComponentType.Builder<T>> builder) {
         var componentType = builder.apply(DataComponentType.builder()).build();
         DATA_COMPONENT_TYPES.register(name, () -> componentType);

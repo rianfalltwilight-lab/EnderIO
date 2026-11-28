@@ -1,5 +1,6 @@
 package com.enderio.enderio.client.content.conduits.gui;
 
+import net.minecraft.client.gui.components.EditBox;
 import com.enderio.core.client.gui.screen.EnderContainerScreen;
 import com.enderio.core.client.gui.widgets.IconButton;
 import com.enderio.core.client.gui.widgets.ToggleIconButton;
@@ -116,6 +117,17 @@ public class ConduitScreen extends EnderContainerScreen<ConduitMenu> {
         }
 
         return super.renderCustomTooltip(guiGraphics, mouseX, mouseY);
+    }
+
+    @Override
+    public boolean onKeyPressed(int keyCode, int scanCode, int modifiers) {
+        // While typing a number, keys must not trigger hotbar swaps or close the screen.
+        if (getFocused() instanceof EditBox box && box.isFocused()) {
+            box.keyPressed(keyCode, scanCode, modifiers);
+            return true;
+        }
+
+        return false;
     }
 
     // Due to the generics, the menu data access and screen type need to be

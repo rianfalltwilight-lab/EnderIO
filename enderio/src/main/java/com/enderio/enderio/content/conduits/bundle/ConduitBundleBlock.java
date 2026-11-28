@@ -1,5 +1,9 @@
 package com.enderio.enderio.content.conduits.bundle;
 
+import com.enderio.core.common.util.TooltipUtil;
+import com.enderio.enderio.content.conduits.ConduitLang;
+import com.enderio.enderio.content.conduits.ConduitRunUpgrade;
+import java.util.List;
 import com.enderio.enderio.api.EnderIOCapabilities;
 import com.enderio.enderio.api.EnderIODataComponents;
 import com.enderio.enderio.api.conduits.Conduit;
@@ -370,6 +374,11 @@ public class ConduitBundleBlock extends Block implements EntityBlock, SimpleWate
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
             Player player, InteractionHand hand, BlockHitResult hitResult) {
 
+        // In line mode the item picks the line's ends itself.
+        if (ConduitBlockItem.isLineMode(stack)) {
+            return ItemInteractionResult.SKIP_DEFAULT_BLOCK_INTERACTION;
+        }
+
         if (level.getBlockEntity(pos) instanceof ConduitBundleBlockEntity conduitBundle) {
             var result = addConduit(stack, level, pos, player, conduitBundle);
             if (result != ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION) {
@@ -404,12 +413,24 @@ public class ConduitBundleBlock extends Block implements EntityBlock, SimpleWate
             primaryConnectionSide = blockHitResult.getDirection().getOpposite();
         }
 
+        // Sneaking upgrades the whole connected run, which has to be found while it still holds the old conduit.
+        List<BlockPos> run = List.of();
+        Holder<Conduit<?, ?>> replaceable = conduitBundle.getConduitByType(conduit.value().type());
+        if (!level.isClientSide() && player.isShiftKeyDown() && replaceable != null && !replaceable.equals(conduit)) {
+            run = ConduitRunUpgrade.connectedRun(conduitBundle, replaceable);
+        }
+
         AddConduitResult addResult = conduitBundle.addConduit(conduit, primaryConnectionSide, player);
 
         if (addResult instanceof AddConduitResult.Upgrade(Holder<Conduit<?, ?>> replacedConduit)) {
             if (!player.getAbilities().instabuild) {
                 stack.shrink(1);
                 player.getInventory().placeItemBackInInventory(ConduitBlockItem.getStackFor(replacedConduit, 1));
+            }
+
+            if (!run.isEmpty()) {
+                int upgraded = ConduitRunUpgrade.upgrade(run, conduit, replacedConduit, stack, player);
+                player.displayClientMessage(TooltipUtil.withArgs(ConduitLang.CONDUIT_RUN_UPGRADED, upgraded + 1), true);
             }
         } else if (addResult instanceof AddConduitResult.Insert) {
             if (!player.getAbilities().instabuild) {

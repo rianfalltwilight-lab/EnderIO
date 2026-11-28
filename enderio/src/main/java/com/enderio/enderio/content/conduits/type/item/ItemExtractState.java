@@ -12,6 +12,8 @@ public final class ItemExtractState {
     private int idleCycles;
     private long wakeAt;
     private long networkRevision;
+    private boolean hasRun;
+    private long lastRun;
 
     /**
      * @return whether the connection should be skipped. Any change to the network's cache wakes it.
@@ -42,6 +44,19 @@ public final class ItemExtractState {
             int doublings = Math.min(idleCycles - IDLE_CYCLES_BEFORE_SLEEP + 1, 10);
             wakeAt = gameTime + Math.min((long) tickRate << doublings, maxSleepTicks);
         }
+    }
+
+    /**
+     * Whether a connection with its own extraction interval may run. Network changes do not shortcut this, so toggling
+     * redstone cannot be used to move more than the conduit allows.
+     */
+    public boolean isDue(long gameTime, int interval) {
+        return !hasRun || gameTime - lastRun >= interval;
+    }
+
+    public void ran(long gameTime) {
+        hasRun = true;
+        lastRun = gameTime;
     }
 
     public ItemTransferStatus status() {

@@ -83,6 +83,25 @@ public class ConduitLang {
     public static final MutableComponent PROBE_MOVED = message("probe/diagnostics/moved");
     public static final MutableComponent PROBE_SLEEPING = message("probe/diagnostics/sleeping");
 
+    public static final MutableComponent EXTRACT_INTERVAL = gui("extract_interval");
+    public static final MutableComponent EXTRACT_INTERVAL_DEFAULT = gui("extract_interval/default");
+    public static final MutableComponent EXTRACT_INTERVAL_TICKS = gui("extract_interval/ticks");
+    public static final MutableComponent BALANCED_ENABLED = gui("balanced/enabled");
+    public static final MutableComponent BALANCED_DISABLED = gui("balanced/disabled");
+
+    public static final MutableComponent CONDUIT_PROBE_STATE_PASTE_NETWORK = tooltip("probe/paste_network");
+    public static final MutableComponent CONDUIT_PROBE_NOTHING_COPIED = message("probe/nothing_copied");
+    public static final MutableComponent CONDUIT_PROBE_APPLIED_TO_NETWORK = message("probe/applied_to_network");
+    public static final MutableComponent CONDUIT_RUN_UPGRADED = message("conduit/run_upgraded");
+    public static final MutableComponent CONDUIT_LINE_HINT = tooltip("conduit/line/hint");
+    public static final MutableComponent CONDUIT_LINE_ON = message("conduit/line/on");
+    public static final MutableComponent CONDUIT_LINE_OFF = message("conduit/line/off");
+    public static final MutableComponent CONDUIT_LINE_STARTED = message("conduit/line/started");
+    public static final MutableComponent CONDUIT_LINE_TOO_LONG = message("conduit/line/too_long");
+    public static final MutableComponent CONDUIT_LINE_BLOCKED = message("conduit/line/blocked");
+    public static final MutableComponent CONDUIT_LINE_NOT_ENOUGH = message("conduit/line/not_enough");
+    public static final MutableComponent CONDUIT_LINE_PLACED = message("conduit/line/placed");
+
     public static MutableComponent probeStatus(ItemTransferStatus status) {
         return message("probe/diagnostics/status/" + status.name().toLowerCase(Locale.ROOT));
     }

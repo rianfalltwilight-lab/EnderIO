@@ -39,16 +39,16 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
 
     @Override
     protected void tickNetwork(ServerLevel level, ConduitNetwork network, List<Holder<Conduit<?, ?>>> tickableConduits) {
-        var remainingPerPath = new Object2IntOpenHashMap<ConduitConnectionPath>();
-        remainingPerPath.defaultReturnValue(-1);
+        var usedPerPath = new Object2IntOpenHashMap<ConduitConnectionPath>();
+        usedPerPath.defaultReturnValue(0);
 
         for (var channel : network.allChannels()) {
-            tickChannel(level, network, tickableConduits, remainingPerPath, channel);
+            tickChannel(level, network, tickableConduits, usedPerPath, channel);
         }
     }
 
     private void tickChannel(ServerLevel level, ConduitNetwork network, List<Holder<Conduit<?, ?>>> tickableConduits,
-            Object2IntOpenHashMap<ConduitConnectionPath> remainingPerPath, DyeColor channel) {
+            Object2IntOpenHashMap<ConduitConnectionPath> usedPerPath, DyeColor channel) {
         long gameTime = level.getGameTime();
         long networkRevision = network instanceof ConduitNetworkImpl impl ? impl.cacheRevision() : 0;
         int maxSleepTicks = ConduitsConfig.COMMON.ITEM_CONDUIT_MAX_SLEEP_TICKS.get();
@@ -68,23 +68,38 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
             }
 
             int tickRate = extractConduit.value().networkTickRate();
+            var config = extractConnection.connectionConfig(EIOConduitTypes.ConnectionTypes.ITEM.get());
+            int interval = effectiveInterval(config.extractInterval(), tickRate);
+            // The conduit's own cycle is already scheduled; only longer intervals need to be tracked.
+            if (interval > tickRate && !state.isDue(gameTime, interval)) {
+                continue;
+            }
+            state.ran(gameTime);
+
             var insertPaths = network.insertConnectionsFrom(extractConnection);
             if (insertPaths.isEmpty()) {
-                state.record(ItemTransferStatus.NO_DESTINATION, 0, gameTime, tickRate, maxSleepTicks);
+                state.record(ItemTransferStatus.NO_DESTINATION, 0, gameTime, interval, maxSleepTicks);
                 continue;
             }
 
             // Get extract handler from the connection.
             IItemHandler extractHandler = extractConnection.getSidedCapability(Capabilities.ItemHandler.BLOCK);
             if (extractHandler == null) {
-                state.record(ItemTransferStatus.NO_SOURCE, 0, gameTime, tickRate, maxSleepTicks);
+                state.record(ItemTransferStatus.NO_SOURCE, 0, gameTime, interval, maxSleepTicks);
                 continue;
             }
 
             var attempt = new Attempt();
-            transfer(extractConnection, extractConduit.value(), extractHandler, insertPaths, nodeData, remainingPerPath, attempt);
-            state.record(attempt.status(), attempt.moved, gameTime, tickRate, maxSleepTicks);
+            // A longer interval moves proportionally more at once, never more per tick than the conduit allows.
+            transfer(extractConnection, extractConduit.value(), extractHandler, insertPaths, nodeData, usedPerPath, attempt,
+                    interval / tickRate);
+            state.record(attempt.status(), attempt.moved, gameTime, interval, maxSleepTicks);
         }
+    }
+
+    /** The configured interval, rounded up to a whole number of the conduit's cycles. */
+    static int effectiveInterval(int configured, int tickRate) {
+        return Math.max(1, (configured + tickRate - 1) / tickRate) * tickRate;
     }
 
     /** What happened while trying to move items out of one connection. */
@@ -119,7 +134,7 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
 
     private void transfer(ConduitBlockConnection extractConnection, ItemConduit conduit, IItemHandler extractHandler,
             List<ConduitConnectionPath> insertPaths, ItemConduitNodeData nodeData,
-            Object2IntOpenHashMap<ConduitConnectionPath> remainingPerPath, Attempt attempt) {
+            Object2IntOpenHashMap<ConduitConnectionPath> usedPerPath, Attempt attempt, int cycles) {
         var connectionConfig = extractConnection.connectionConfig(EIOConduitTypes.ConnectionTypes.ITEM.get());
 
         // Get extraction filter
@@ -127,13 +142,24 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
         var extractFilter = extractFilterStack.isEmpty() ? null : extractFilterStack.getCapability(EnderIOCapabilities.ITEM_FILTER);
         var extractContext = extractFilter == null ? null : new ItemFilterContext(extractHandler, ItemFilterDirection.EXTRACT);
 
-        int speed = conduit.transferRatePerCycle();
+        int speed = (int) Math.min(Integer.MAX_VALUE, (long) conduit.transferRatePerCycle() * cycles);
         int tickRate = conduit.networkTickRate();
         int batches = 0;
+        int maxBatches = MAX_BATCHES_PER_CYCLE * Math.min(cycles, 8);
+        // Balanced delivery gives every destination at most an equal part of this cycle's items.
+        var balancedSent = connectionConfig.isBalanced() ? new Object2IntOpenHashMap<ConduitConnectionPath>() : null;
+        int share = speed;
+        if (balancedSent != null) {
+            long destinations = insertPaths.stream()
+                    .filter(path -> connectionConfig.isSelfFeed() || path.end().node() != extractConnection.node()
+                            || path.end().connectionSide() != extractConnection.connectionSide())
+                    .count();
+            share = (int) Math.max(1, (speed + destinations - 1) / Math.max(1, destinations));
+        }
 
         nextItem: for (int i = 0; i < extractHandler.getSlots(); i++) {
             // Keep drawing from the same slot: bulk storage holds far more than one stack in it.
-            while (attempt.moved < speed && batches < MAX_BATCHES_PER_CYCLE) {
+            while (attempt.moved < speed && batches < maxBatches) {
                 ItemStack extractedItem = extractHandler.extractItem(i, speed - attempt.moved, true);
                 if (extractedItem.isEmpty()) {
                     continue nextItem;
@@ -168,14 +194,18 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
                     var insertPath = insertPaths.get(senderIndex);
                     var insertConnection = insertPath.end();
 
-                    int remaining = remainingPerPath.getInt(insertPath);
-                    if (remaining < 0) {
-                        remaining = Math.max(0, insertPath.property(ItemConduit.PATH_SPEED_AND_TICK_RATE).getAdjustedSpeed(tickRate));
-                        remainingPerPath.put(insertPath, remaining);
-                    }
+                    long capacity = (long) Math.max(0, insertPath.property(ItemConduit.PATH_SPEED_AND_TICK_RATE).getAdjustedSpeed(tickRate)) * cycles;
+                    int used = usedPerPath.getInt(insertPath);
+                    int remaining = (int) Math.min(Integer.MAX_VALUE, Math.max(0, capacity - used));
                     if (remaining == 0) {
                         attempt.outOfBandwidth = true;
                         continue;
+                    }
+                    if (balancedSent != null) {
+                        remaining = Math.min(remaining, share - balancedSent.getInt(insertPath));
+                        if (remaining <= 0) {
+                            continue;
+                        }
                     }
 
                     // Prevent self-feeding
@@ -224,7 +254,10 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
                     int taken = extractHandler.extractItem(i, successfullyInserted, false).getCount();
 
                     // Track how much was inserted through this path.
-                    remainingPerPath.put(insertPath, remaining - successfullyInserted);
+                    usedPerPath.addTo(insertPath, successfullyInserted);
+                    if (balancedSent != null) {
+                        balancedSent.addTo(insertPath, successfullyInserted);
+                    }
 
                     if (connectionConfig.isRoundRobin()) {
                         nodeData.setIndex(extractConnection.connectionSide(), senderIndex + 1);
@@ -243,7 +276,7 @@ public class ItemConduitTicker extends ConduitTickerBase<ItemConduit> {
                 }
             }
 
-            if (attempt.moved >= speed || batches >= MAX_BATCHES_PER_CYCLE) {
+            if (attempt.moved >= speed || batches >= maxBatches) {
                 return;
             }
         }

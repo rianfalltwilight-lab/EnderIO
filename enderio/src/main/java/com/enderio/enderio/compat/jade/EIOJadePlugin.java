@@ -1,5 +1,7 @@
 package com.enderio.enderio.compat.jade;
 
+import com.enderio.enderio.content.conduits.bundle.ConduitBundleBlock;
+import com.enderio.enderio.content.conduits.bundle.ConduitBundleBlockEntity;
 import com.enderio.enderio.EnderIO;
 import com.enderio.enderio.api.conduits.bundle.ConduitBundle;
 import com.enderio.enderio.client.content.conduits.model.facades.FacadeUtil;
@@ -16,6 +18,8 @@ import snownee.jade.api.WailaPlugin;
 public class EIOJadePlugin implements IWailaPlugin {
 
     public static final ResourceLocation SOUL_BOUND_COMPONENT = EnderIO.rl("soul_bound");
+
+    public static final ResourceLocation CONDUIT_COMPONENT = EnderIO.rl("conduit");
 
     @Override
     public void registerClient(IWailaClientRegistration registration) {
@@ -38,10 +42,12 @@ public class EIOJadePlugin implements IWailaPlugin {
         });
 
         registration.registerBlockComponent(SoulBoundComponentProvider.INSTANCE, Block.class);
+        registration.registerBlockComponent(ConduitComponentProvider.INSTANCE, ConduitBundleBlock.class);
     }
 
     @Override
     public void register(IWailaCommonRegistration registration) {
         registration.registerBlockDataProvider(SoulBoundComponentProvider.INSTANCE, Block.class);
+        registration.registerBlockDataProvider(ConduitComponentProvider.INSTANCE, ConduitBundleBlockEntity.class);
     }
 }

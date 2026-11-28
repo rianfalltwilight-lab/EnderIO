@@ -238,6 +238,23 @@ public class EIOLanguageProvider extends LanguageProvider {
         add(ConduitLang.CONDUIT_PROBE_STATE_COPY_PASTE, "Probe");
         add(ConduitLang.CONDUIT_PROBE_CONTAINS_COPIED, "Copy/Paste");
         add(ConduitLang.CONDUIT_PROBE_MESSAGE_SWITCHED_MODE, "Switched conduit probe mode to %s");
+        add(ConduitLang.EXTRACT_INTERVAL, "Extraction interval");
+        add(ConduitLang.EXTRACT_INTERVAL_DEFAULT, "Default");
+        add(ConduitLang.EXTRACT_INTERVAL_TICKS, "%st");
+        add(ConduitLang.BALANCED_ENABLED, "Balanced Delivery Enabled");
+        add(ConduitLang.BALANCED_DISABLED, "Balanced Delivery Disabled");
+        add(ConduitLang.CONDUIT_PROBE_STATE_PASTE_NETWORK, "Apply to network");
+        add(ConduitLang.CONDUIT_PROBE_NOTHING_COPIED, "Copy a configuration first");
+        add(ConduitLang.CONDUIT_PROBE_APPLIED_TO_NETWORK, "Applied to %s connections");
+        add(ConduitLang.CONDUIT_RUN_UPGRADED, "Upgraded %s conduits");
+        add(ConduitLang.CONDUIT_LINE_HINT, "Sneak-use on air for line mode");
+        add(ConduitLang.CONDUIT_LINE_ON, "Line mode on: use two blocks to place a line");
+        add(ConduitLang.CONDUIT_LINE_OFF, "Line mode off");
+        add(ConduitLang.CONDUIT_LINE_STARTED, "Start set, now use the end");
+        add(ConduitLang.CONDUIT_LINE_TOO_LONG, "Lines are limited to %s blocks");
+        add(ConduitLang.CONDUIT_LINE_BLOCKED, "The line is blocked at %s, %s, %s");
+        add(ConduitLang.CONDUIT_LINE_NOT_ENOUGH, "This line needs %s conduits");
+        add(ConduitLang.CONDUIT_LINE_PLACED, "Placed %s conduits");
         add(ConduitLang.PROBE_NODES, "Conduits: %s");
         add(ConduitLang.PROBE_NETWORK, "Conduits: %s, extracting: %s, inserting: %s");
         add(ConduitLang.PROBE_NOT_TICKING, "This chunk is not ticking");
@@ -793,6 +810,7 @@ public class EIOLanguageProvider extends LanguageProvider {
     private void addJadeLang() {
         final String configPrefix = "config.jade.plugin_";
         add(configPrefix + EIOJadePlugin.SOUL_BOUND_COMPONENT.toLanguageKey(), "Soul Bound");
+        add(configPrefix + "enderio.conduit", "Conduit status");
     }
 
     private void add(ResourceKey<Conduit<?, ?>> key, String translation) {
