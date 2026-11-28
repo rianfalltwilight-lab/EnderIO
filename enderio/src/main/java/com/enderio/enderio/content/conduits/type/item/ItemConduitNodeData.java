@@ -26,6 +26,8 @@ public final class ItemConduitNodeData implements NodeData {
             ItemConduitNodeData::new);
     private final Map<Direction, Integer> roundRobinIndexes;
     private long revision;
+    // Runtime only: not part of the codec, equality or the save revision.
+    private final Map<Direction, ItemExtractState> extractStates = new HashMap<>();
 
     public ItemConduitNodeData() {
         this(Map.of());
@@ -49,6 +51,10 @@ public final class ItemConduitNodeData implements NodeData {
         if (previous == null || previous != index) {
             revision++;
         }
+    }
+
+    public ItemExtractState extractState(Direction side) {
+        return extractStates.computeIfAbsent(side, s -> new ItemExtractState());
     }
 
     public long revision() {

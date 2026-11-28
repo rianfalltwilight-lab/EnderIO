@@ -1,5 +1,7 @@
 package com.enderio.enderio.content.conduits;
 
+import com.enderio.enderio.content.conduits.type.item.ItemTransferStatus;
+import java.util.Locale;
 import com.enderio.enderio.EnderIO;
 import net.minecraft.Util;
 import net.minecraft.network.chat.Component;
@@ -72,6 +74,18 @@ public class ConduitLang {
     public static final MutableComponent CONDUIT_PROBE_MESSAGE_SWITCHED_MODE = message("probe/switched_mode");
     public static final MutableComponent CONDUIT_PROBE_MESSAGE_COPIED = message("probe/copied");
     public static final MutableComponent CONDUIT_PROBE_MESSAGE_PASTED = message("probe/pasted");
+    public static final MutableComponent PROBE_NODES = message("probe/diagnostics/nodes");
+    public static final MutableComponent PROBE_NETWORK = message("probe/diagnostics/network");
+    public static final MutableComponent PROBE_NOT_TICKING = message("probe/diagnostics/not_ticking");
+    public static final MutableComponent PROBE_EXTRACT_OFF = message("probe/diagnostics/extract_off");
+    public static final MutableComponent PROBE_REDSTONE_INACTIVE = message("probe/diagnostics/redstone_inactive");
+    public static final MutableComponent PROBE_DESTINATIONS = message("probe/diagnostics/destinations");
+    public static final MutableComponent PROBE_MOVED = message("probe/diagnostics/moved");
+    public static final MutableComponent PROBE_SLEEPING = message("probe/diagnostics/sleeping");
+
+    public static MutableComponent probeStatus(ItemTransferStatus status) {
+        return message("probe/diagnostics/status/" + status.name().toLowerCase(Locale.ROOT));
+    }
 
     // endregion
 

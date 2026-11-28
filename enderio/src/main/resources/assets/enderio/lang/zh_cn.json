@@ -607,5 +607,21 @@
   "tooltip.enderio.soul_bound": "绑定灵魂：%s",
   "tooltip.enderio.tool.soul_vial.health": "生命值：%s/%s",
   "tooltip.enderio.tool.void_vial.hint": "代替玩家收集经验球，收集的经验可以存入储罐或被玩家饮用。",
-  "tooltip.enderio.tool.void_vial.stored_experience": "已存储：%s经验等级级+%s经验点数"
+  "tooltip.enderio.tool.void_vial.stored_experience": "已存储：%s经验等级级+%s经验点数",
+  "message.enderio.probe.diagnostics.nodes": "导管数量：%s",
+  "message.enderio.probe.diagnostics.network": "导管：%s，抽取口：%s，输入口：%s",
+  "message.enderio.probe.diagnostics.not_ticking": "所在区块未在运行",
+  "message.enderio.probe.diagnostics.extract_off": "此连接未开启抽取",
+  "message.enderio.probe.diagnostics.redstone_inactive": "红石条件未满足",
+  "message.enderio.probe.diagnostics.destinations": "可到达的目标：%s",
+  "message.enderio.probe.diagnostics.moved": "上次搬运了 %s 个物品",
+  "message.enderio.probe.diagnostics.sleeping": "休眠中，%s 秒内再次检查",
+  "message.enderio.probe.diagnostics.status.not_checked": "尚未检查",
+  "message.enderio.probe.diagnostics.status.no_source": "相邻方块没有可抽取的物品栏",
+  "message.enderio.probe.diagnostics.status.no_destination": "此频道没有可用的目标",
+  "message.enderio.probe.diagnostics.status.source_empty": "来源中没有可抽取的物品",
+  "message.enderio.probe.diagnostics.status.extract_filtered": "抽取过滤器拦下了来源中的所有物品",
+  "message.enderio.probe.diagnostics.status.insert_filtered": "目标的输入过滤器拒收",
+  "message.enderio.probe.diagnostics.status.destinations_full": "目标已满或不接受这些物品",
+  "message.enderio.probe.diagnostics.status.bandwidth_used": "线路带宽已被其他抽取口用完"
 }

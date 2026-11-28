@@ -1,5 +1,6 @@
 package com.enderio.enderio.datagen.client;
 
+import com.enderio.enderio.content.conduits.type.item.ItemTransferStatus;
 import com.enderio.core.common.registries.FluidDeferredHolders;
 import com.enderio.enderio.EnderIO;
 import com.enderio.enderio.api.conduits.Conduit;
@@ -237,6 +238,22 @@ public class EIOLanguageProvider extends LanguageProvider {
         add(ConduitLang.CONDUIT_PROBE_STATE_COPY_PASTE, "Probe");
         add(ConduitLang.CONDUIT_PROBE_CONTAINS_COPIED, "Copy/Paste");
         add(ConduitLang.CONDUIT_PROBE_MESSAGE_SWITCHED_MODE, "Switched conduit probe mode to %s");
+        add(ConduitLang.PROBE_NODES, "Conduits: %s");
+        add(ConduitLang.PROBE_NETWORK, "Conduits: %s, extracting: %s, inserting: %s");
+        add(ConduitLang.PROBE_NOT_TICKING, "This chunk is not ticking");
+        add(ConduitLang.PROBE_EXTRACT_OFF, "Extraction is off on this connection");
+        add(ConduitLang.PROBE_REDSTONE_INACTIVE, "Waiting for the redstone condition");
+        add(ConduitLang.PROBE_DESTINATIONS, "Reachable destinations: %s");
+        add(ConduitLang.PROBE_MOVED, "Moved %s items on the last attempt");
+        add(ConduitLang.PROBE_SLEEPING, "Sleeping, next check within %s s");
+        add(ConduitLang.probeStatus(ItemTransferStatus.NOT_CHECKED), "Not checked yet");
+        add(ConduitLang.probeStatus(ItemTransferStatus.NO_SOURCE), "The block here has no item inventory to extract from");
+        add(ConduitLang.probeStatus(ItemTransferStatus.NO_DESTINATION), "No usable destination on this channel");
+        add(ConduitLang.probeStatus(ItemTransferStatus.SOURCE_EMPTY), "Nothing to extract from the source");
+        add(ConduitLang.probeStatus(ItemTransferStatus.EXTRACT_FILTERED), "The extract filter blocks everything in the source");
+        add(ConduitLang.probeStatus(ItemTransferStatus.INSERT_FILTERED), "Destination filters reject the items");
+        add(ConduitLang.probeStatus(ItemTransferStatus.DESTINATIONS_FULL), "Destinations are full or refuse the items");
+        add(ConduitLang.probeStatus(ItemTransferStatus.BANDWIDTH_USED), "Path throughput was used up by other sources");
         add(ConduitLang.CONDUIT_PROBE_MESSAGE_COPIED, "Copied data: %s");
         add(ConduitLang.CONDUIT_PROBE_MESSAGE_PASTED, "Pasted data: %s");
 

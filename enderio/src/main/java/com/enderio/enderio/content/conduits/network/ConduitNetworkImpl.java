@@ -88,6 +88,7 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     private boolean shouldRebuildCache = true;
     private boolean haveConnectionsChanged = true;
+    private long cacheRevision = 1;
     private final Set<ConduitNodeImpl> dirtyNodes = Sets.newHashSet();
 
     private final Multimap<Long, ConduitNodeImpl> nodesByChunkPos = HashMultimap.create();
@@ -388,6 +389,10 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             return;
         }
 
+        if (shouldRebuildCache || !dirtyNodes.isEmpty() || haveConnectionsChanged) {
+            cacheRevision++;
+        }
+
         if (shouldRebuildCache) {
             rebuildCache();
         } else if (!dirtyNodes.isEmpty()) {
@@ -406,6 +411,11 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
             updateChannelList();
             sortConnectionLists();
         }
+    }
+
+    /** Changes whenever the cached routes or connection configs may have changed. */
+    public long cacheRevision() {
+        return cacheRevision;
     }
 
     public void onNodeUpdated(ConduitNodeImpl node) {

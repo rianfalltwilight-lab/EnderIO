@@ -36,7 +36,7 @@ public class ConduitsBootstrap {
 
         register(context, EIOConduits.ITEM, (desc) -> new ItemConduit(EnderIO.rl("block/conduit/item"), desc, 32, 20));
         register(context, EIOConduits.ENERGETIC_ITEM, (desc) -> new ItemConduit(EnderIO.rl("block/conduit/item"), desc, 64, 20));
-        register(context, EIOConduits.VIBRANT_ITEM, (desc) -> new ItemConduit(EnderIO.rl("block/conduit/item"), desc, 64, 10));
+        register(context, EIOConduits.VIBRANT_ITEM, (desc) -> new ItemConduit(EnderIO.rl("block/conduit/item"), desc, 512, 10));
     }
 
     private static void register(BootstrapContext<Conduit<?, ?>> context, ResourceKey<Conduit<?, ?>> key, Function<Component, Conduit<?, ?>> factory) {

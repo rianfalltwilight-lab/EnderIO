@@ -1,5 +1,6 @@
 package com.enderio.enderio.content.conduits.probe;
 
+import org.jetbrains.annotations.Nullable;
 import com.enderio.core.common.util.TooltipUtil;
 import com.enderio.enderio.EnderIO;
 import com.enderio.enderio.api.conduits.connection.config.ConnectionConfig;
@@ -60,6 +61,11 @@ public class ConduitProbeItem extends Item {
         }
 
         var conduitConnection = conduit.getShape().getConnectionFromHit(context.getClickedPos(), context.getHitResult());
+        if (getState(stack) == State.PROBE) {
+            // Anywhere on the bundle reports the networks; a connector also reports that connection.
+            handleProbe(conduit, conduitConnection == null ? null : conduitConnection.getFirst(), player);
+            return InteractionResult.SUCCESS;
+        }
         if (conduitConnection == null) {
             return InteractionResult.FAIL;
         }
@@ -73,11 +79,17 @@ public class ConduitProbeItem extends Item {
                     handlePaste(conduit, face, stack, player);
                 }
             }
-            case PROBE -> {
-                player.sendSystemMessage(Component.literal("This feature isn't implemented yet.").withStyle(ChatFormatting.RED));
-            }
+            case PROBE -> throw new IllegalStateException("Probing is handled above.");
         }
         return InteractionResult.SUCCESS;
+    }
+
+    private void handleProbe(ConduitBundleBlockEntity bundle, @Nullable Direction face, Player player) {
+        long gameTime = bundle.getLevel().getGameTime();
+        for (var conduit : bundle.getConduits()) {
+            ConduitDiagnostics.describe(conduit, bundle.getConduitNode(conduit), face, gameTime)
+                    .forEach(player::sendSystemMessage);
+        }
     }
 
     private static final Set<String> SKIP_FIELDS = Set.of("DEFAULT", "CODEC", "STREAM_CODEC", "TYPE");
