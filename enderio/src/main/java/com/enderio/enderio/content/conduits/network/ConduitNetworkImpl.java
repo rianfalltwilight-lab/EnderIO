@@ -390,17 +390,12 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
         if (shouldRebuildCache) {
             rebuildCache();
-        } else {
+        } else if (!dirtyNodes.isEmpty()) {
+            // Drop every dirty node first so the cached path lists are only scanned once, then add back those that tick.
+            removeTickingNodes(dirtyNodes);
             for (var node : dirtyNodes) {
                 if (node.isTicking()) {
-                    // Update nodes by removing and adding again.
-                    if (tickingNodes.contains(node)) {
-                        removeTickingNode(node);
-                    }
-
                     addTickingNode(node);
-                } else if (tickingNodes.contains(node)) {
-                    removeTickingNode(node);
                 }
             }
 
@@ -526,20 +521,22 @@ public class ConduitNetworkImpl extends Network<ConduitNetworkImpl, ConduitNodeI
 
     // endregion
 
-    private void removeTickingNode(ConduitNodeImpl node) {
-        if (!tickingNodes.remove(node)) {
-            return;
+    private void removeTickingNodes(Collection<ConduitNodeImpl> nodes) {
+        Set<ConduitBlockConnection> removed = Sets.newHashSet();
+        for (var node : nodes) {
+            if (tickingNodes.remove(node)) {
+                removed.addAll(endpointConnections.removeAll(node));
+            }
         }
-
-        var removed = endpointConnections.removeAll(node);
         if (removed.isEmpty()) {
             return;
         }
+
+        insertConnections.removeIf(removed::contains);
+        extractConnections.removeIf(removed::contains);
         for (var connection : removed) {
             accessiblePathsByConnection.remove(connection);
 
-            insertConnections.remove(connection);
-            extractConnections.remove(connection);
             for (var color : DyeColor.values()) {
                 insertConnectionsByChannel.remove(color, connection);
                 extractConnectionsByChannel.remove(color, connection);

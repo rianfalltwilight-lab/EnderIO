@@ -1,5 +1,8 @@
 package com.enderio.enderio.tests.conduits.network;
 
+import java.util.Collections;
+import net.minecraft.world.level.ChunkPos;
+import com.enderio.enderio.api.conduits.connection.path.ConduitConnectionPath;
 import com.enderio.enderio.api.EnderIORegistries;
 import com.enderio.enderio.api.conduits.Conduit;
 import com.enderio.enderio.api.conduits.connection.ConduitBlockConnection;
@@ -235,6 +238,61 @@ class ItemNetworkRoutingTests {
         assertEquals(connection, paths.getFirst().end());
         assertEquals(1, paths.getFirst().length());
         assertEquals(paths, network.extractConnectionsFrom(connection));
+    }
+
+    @Test
+    void updatingAWholeChunkAtOnceMatchesAFullRebuild() {
+        var nodes = new ArrayList<Endpoint>();
+        for (int x = 0; x < 40; x++) {
+            nodes.add(endpoint(x, x % 3 == 0 ? EXTRACT : INSERT));
+        }
+        var network = nodes.getFirst().node.getNetwork();
+        for (int x = 1; x < 40; x++) {
+            network.connect(nodes.get(x - 1).node, nodes.get(x).node);
+        }
+        network.ensureCachesReady();
+        var allTicking = routes(network);
+        long middleChunk = ChunkPos.asLong(new BlockPos(16, 64, 0));
+
+        // Every node of one chunk stays ticking but is refreshed.
+        network.onChunkTickStatusChanged(middleChunk);
+        network.ensureCachesReady();
+        assertEquals(allTicking, routes(network));
+
+        // The whole chunk stops ticking.
+        when(level.shouldTickBlocksAt(any(BlockPos.class)))
+            .thenAnswer(call -> ChunkPos.asLong(call.<BlockPos>getArgument(0)) != middleChunk);
+        network.onChunkTickStatusChanged(middleChunk);
+        network.ensureCachesReady();
+        assertEquals(24, network.blockConnections().size());
+        for (var connection : network.blockConnections()) {
+            for (var path : network.blockConnectionsAccessibleFrom(connection)) {
+                assertNotEquals(middleChunk, ChunkPos.asLong(path.end().node().pos()));
+            }
+        }
+
+        // And comes back.
+        when(level.shouldTickBlocksAt(any(BlockPos.class))).thenReturn(true);
+        network.onChunkTickStatusChanged(middleChunk);
+        network.ensureCachesReady();
+        assertEquals(allTicking, routes(network));
+    }
+
+    private static List<String> routes(ConduitNetworkImpl network) {
+        var routes = new ArrayList<String>();
+        for (var connection : network.blockConnections()) {
+            network.blockConnectionsAccessibleFrom(connection).forEach(path -> routes.add(route("any", path)));
+            network.insertConnectionsFrom(connection).forEach(path -> routes.add(route("insert", path)));
+            network.extractConnectionsFrom(connection).forEach(path -> routes.add(route("extract", path)));
+        }
+        network.insertConnections().forEach(c -> routes.add("canInsert " + c.node().pos().getX() + "->"));
+        network.extractConnections().forEach(c -> routes.add("canExtract " + c.node().pos().getX() + "->"));
+        Collections.sort(routes);
+        return routes;
+    }
+
+    private static String route(String kind, ConduitConnectionPath path) {
+        return kind + " " + path.start().node().pos().getX() + "->" + path.end().node().pos().getX() + " length " + path.length();
     }
 
     private static final class CountingNetwork extends ConduitNetworkImpl {
